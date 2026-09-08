@@ -1,0 +1,608 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block heading %}Settings{% endblock %}
+{% block lede %}System integrations: database, system reset, input feeds, enrichment, internet intel, AI modules, asset APIs, ticketing, and notification message layout.{% endblock %}
+{% block content %}
+  <div class="settings-shell">
+    <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+      <button class="settings-tab is-active" type="button" data-tab="database">Database</button>
+      <button class="settings-tab" type="button" data-tab="system">System</button>
+      <button class="settings-tab" type="button" data-tab="feeds">Feeds</button>
+      <button class="settings-tab" type="button" data-tab="enrichment">Enrichment</button>
+      <button class="settings-tab" type="button" data-tab="intel">Internet intel</button>
+      <button class="settings-tab" type="button" data-tab="ai">AI modules</button>
+      <button class="settings-tab" type="button" data-tab="assets">Inventory</button>
+      <button class="settings-tab" type="button" data-tab="ticketing">Ticketing</button>
+      <button class="settings-tab" type="button" data-tab="message">Message</button>
+    </div>
+
+    <section class="panel settings-panel tab-panel is-active" data-panel="database">
+      <form id="postgres-form">
+      <div class="panel-head">
+        <div class="panel-head-copy">
+          <h2>System database</h2>
+        </div>
+        <div class="choice-seg" role="group" aria-label="Database type" data-choice-group="pg-mode" data-hint-target="pg-mode-hint">
+          <button type="button" class="choice-seg-btn is-active" data-choice="sqlite" data-hint="File database on this server. Default for first install." aria-pressed="true">SQLite</button>
+          <button type="button" class="choice-seg-btn" data-choice="local" data-hint="PostgreSQL on this Linux host (127.0.0.1 or Unix socket)." aria-pressed="false">Local PostgreSQL</button>
+          <button type="button" class="choice-seg-btn" data-choice="remote" data-hint="Remote database server on the network." aria-pressed="false">External PostgreSQL</button>
+        </div>
+      </div>
+      <div class="settings-form">
+        <p class="choice-hint muted" id="pg-mode-hint">File database on this server. Default for first install.</p>
+
+        <div id="pg-fields" class="pg-field-group" hidden>
+          <div id="pg-remote-fields" class="pg-field-group" hidden>
+            <label>Host <input class="input" id="pg-host" placeholder="db.corp.local or 10.0.0.12" /></label>
+            <label>SSL mode
+              <select class="input" id="pg-ssl">
+                <option value="prefer">prefer</option>
+                <option value="disable">disable</option>
+                <option value="require">require</option>
+                <option value="verify-full">verify-full</option>
+              </select>
+            </label>
+          </div>
+          <div id="pg-local-fields" class="pg-field-group" hidden>
+            <p class="muted">Uses this Linux machine. Install PostgreSQL here first (RHEL: <code>dnf install postgresql-server</code>), create a database and role, then save. Password is optional if <code>pg_hba.conf</code> uses peer or trust for local connections.</p>
+            <label class="switch">
+              <input type="checkbox" id="pg-use-socket" />
+              <span>Connect via Unix socket (typical local Linux install)</span>
+            </label>
+            <label id="pg-socket-path-wrap" hidden>Socket directory
+              <input class="input" id="pg-socket" value="/var/run/postgresql" />
+            </label>
+          </div>
+          <label id="pg-port-wrap">Port <input class="input" id="pg-port" type="number" min="1" max="65535" value="5432" /></label>
+          <label>Database name <input class="input" id="pg-database" placeholder="evulntasker" /></label>
+          <label>Username <input class="input" id="pg-username" placeholder="evulntasker or postgres" autocomplete="off" /></label>
+          <label>Password
+            <input class="input" id="pg-password" type="password" placeholder="leave blank to keep stored / optional for local peer" autocomplete="new-password" />
+            <span class="muted" id="pg-password-hint"></span>
+          </label>
+        </div>
+        <p class="muted">CVEs, assets, sources, tickets, and audit logs go to the selected database. Existing SQLite data is not copied automatically. Tables are created if they do not exist.</p>
+        <p class="muted" id="pg-current"></p>
+        <div class="filters">
+          <button class="btn" type="submit">Save and apply</button>
+          <button class="btn-ghost" type="button" id="pg-test">Test connection</button>
+        </div>
+        <p class="muted" id="pg-status"></p>
+      </div>
+      </form>
+    </section>
+
+    <section class="panel settings-panel tab-panel" data-panel="system">
+      <div class="panel-head">
+        <h2>System</h2>
+        <p class="muted">Dangerous maintenance. This does not change the database connection, input sources, or integration settings.</p>
+      </div>
+      <div class="wipe-box">
+        <h3>Reset system data</h3>
+        <p class="muted">Permanently deletes every row in the two working tables:</p>
+        <ul class="wipe-list">
+          <li><strong>Internal systems</strong> — organization products you added or imported</li>
+          <li><strong>Incoming CVEs</strong> — vulnerabilities ingested or entered, plus pipeline history, tickets, and detections</li>
+        </ul>
+        <button class="btn-danger" type="button" id="reset-system-btn">Reset system</button>
+        <p class="muted" id="wipe-status"></p>
+      </div>
+    </section>
+
+    <section class="panel settings-panel tab-panel" data-panel="feeds">
+      <div class="panel-head">
+        <h2>Input feeds</h2>
+        <p class="muted">Configure how EVulnTasker receives vulnerability intelligence. The source name you set here is what appears on Manage Input Sources.</p>
+      </div>
+      <div class="settings-subtabs" role="tablist" aria-label="Feed types">
+        <button class="settings-subtab is-active" type="button" data-subtab="local" data-group="feeds">Local</button>
+        <button class="settings-subtab" type="button" data-subtab="smb" data-group="feeds">SMB</button>
+        <button class="settings-subtab" type="button" data-subtab="exchange" data-group="feeds">Exchange</button>
+        <button class="settings-subtab" type="button" data-subtab="web" data-group="feeds">ATOM feeds</button>
+      </div>
+
+      <div class="subtab-panel is-active" data-subpanel="local" data-group="feeds">
+        <div class="subtab-head"><h3>Local folder</h3></div>
+        <form id="local-form" class="settings-form settings-fields">
+          <div class="settings-enable-bar">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="local-enabled" /><span>Enable polling</span></label>
+          </div>
+          <p class="settings-desc muted">Drop any text into this folder — .txt, HTML, CSV, JSON, logs. EVulnTasker extracts CVE IDs with regex (for example CVE-2024-3094).</p>
+          <label>Source name
+            <input class="input" id="local-name" placeholder="Local folder" />
+          </label>
+          <label>Folder path on this server
+            <input class="input" id="local-path" placeholder="/var/evulntasker/inbox" />
+          </label>
+          <p class="muted">Must be a real folder on the EVulnTasker Linux host (not a path on your PC). Test path checks the value in this field.</p>
+          <label>Poll interval (seconds) <input class="input" id="local-poll" type="number" min="15" value="60" /></label>
+          <div class="filters">
+            <button class="btn" type="submit">Save</button>
+            <button class="btn-ghost" type="button" data-test="local">Test path</button>
+            <button class="btn-ghost" type="button" data-sync="local">Sync now</button>
+          </div>
+          <p class="muted" id="local-status"></p>
+        </form>
+      </div>
+
+      <div class="subtab-panel" data-subpanel="smb" data-group="feeds">
+        <div class="subtab-head"><h3>SMB / CIFS share</h3></div>
+        <form id="smb-form" class="settings-form settings-fields">
+          <div class="settings-enable-bar">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="smb-enabled" /><span>Enable polling</span></label>
+          </div>
+          <p class="settings-desc muted">Text files (.txt, .csv, .json, .md). CVE via regex; vendor/product/version from labels, CSV/JSON, or CPE. Use the same AD account for every location.</p>
+          <label>Source name
+            <input class="input" id="smb-name" placeholder="SMB share" />
+          </label>
+          <div id="smb-location-list" class="smb-location-list"></div>
+          <div class="filters">
+            <button class="btn-ghost" type="button" id="smb-location-add">+ Add SMB location</button>
+          </div>
+          <label>AD / LDAP domain <input class="input" id="smb-domain" placeholder="CORP" /></label>
+          <label>Username <input class="input" id="smb-username" autocomplete="off" /></label>
+          <label>Password
+            <input class="input" id="smb-password" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
+            <span class="muted" id="smb-password-hint"></span>
+          </label>
+          <label>Poll interval (seconds) <input class="input" id="smb-poll" type="number" min="30" value="300" /></label>
+          <div class="filters">
+            <button class="btn" type="submit">Save</button>
+            <button class="btn-ghost" type="button" data-test="smb">Test connection</button>
+            <button class="btn-ghost" type="button" data-sync="smb">Sync now</button>
+          </div>
+          <p class="muted" id="smb-status"></p>
+        </form>
+      </div>
+
+      <div class="subtab-panel" data-subpanel="exchange" data-group="feeds">
+        <div class="subtab-head"><h3>Outlook / Exchange (on-prem)</h3></div>
+        <form id="outlook-form" class="settings-form settings-fields">
+          <div class="settings-enable-bar">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="outlook-enabled" /><span>Enable mailbox listener</span></label>
+          </div>
+          <p class="settings-desc muted">Each unread mail is scanned for CVE IDs and optional vendor/product/version in the body.</p>
+          <label>Source name
+            <input class="input" id="outlook-name" placeholder="Outlook / Exchange" />
+          </label>
+          <label>Exchange server <input class="input" id="outlook-server" placeholder="mail.corp.local" /></label>
+          <label>AD domain <input class="input" id="outlook-domain" placeholder="CORP" /></label>
+          <label>Username <input class="input" id="outlook-username" autocomplete="off" /></label>
+          <label>Password
+            <input class="input" id="outlook-password" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
+            <span class="muted" id="outlook-password-hint"></span>
+          </label>
+          <label>Mailbox SMTP address <input class="input" id="outlook-email" placeholder="soc@corp.local" /></label>
+          <label>Folder <input class="input" id="outlook-folder" value="Inbox" /></label>
+          <label>Poll interval (seconds) <input class="input" id="outlook-poll" type="number" min="30" value="120" /></label>
+          <div class="filters">
+            <button class="btn" type="submit">Save</button>
+            <button class="btn-ghost" type="button" data-test="outlook">Test connection</button>
+            <button class="btn-ghost" type="button" data-sync="outlook">Poll now</button>
+          </div>
+          <p class="muted" id="outlook-status"></p>
+        </form>
+      </div>
+
+      <div class="subtab-panel" data-subpanel="web" data-group="feeds">
+        <div class="subtab-head"><h3>ATOM feeds</h3></div>
+        <form id="web-form" class="settings-form settings-fields">
+          <div class="settings-enable-bar">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="web-enabled" /><span>Enable polling</span></label>
+          </div>
+          <p class="settings-desc muted">Interfaces from Vulnerability Repositories are listed here on install (NVD, EPSS, and ATOM/RSS feeds). Change a URL, add another feed, or delete one. Enable polling only fetches ATOM/RSS — NVD and EPSS stay enrichment lookups.</p>
+          <label>Source name
+            <input class="input" id="web-name" placeholder="ATOM feeds" />
+          </label>
+          <div id="atom-feed-list" class="atom-feed-list"></div>
+          <div class="filters atom-feed-add-row">
+            <button class="btn-ghost" type="button" id="atom-feed-add">+ Add ATOM feed</button>
+            <button class="btn-ghost" type="button" id="atom-feed-restore">Restore default ATOM feeds</button>
+          </div>
+          <label>Fetch interval
+            <select class="input" id="web-poll">
+              <option value="300">Every 5 minutes</option>
+              <option value="900">Every 15 minutes</option>
+              <option value="1800">Every 30 minutes</option>
+              <option value="3600" selected>Every 1 hour</option>
+              <option value="21600">Every 6 hours</option>
+              <option value="86400">Every 24 hours</option>
+            </select>
+          </label>
+          <div class="filters">
+            <button class="btn" type="submit">Save</button>
+            <button class="btn-ghost" type="button" data-test="web-api">Test feeds</button>
+            <button class="btn-ghost" type="button" data-sync="web-api">Fetch now</button>
+          </div>
+          <p class="muted" id="web-status"></p>
+        </form>
+      </div>
+    </section>
+
+    <section class="panel settings-panel tab-panel" data-panel="enrichment">
+      <form id="enrich-stage-form">
+      <div class="panel-head">
+        <div class="panel-head-copy">
+          <h2>Enrichment</h2>
+          <p class="muted">After extract, before Internal systems matching.</p>
+        </div>
+        <div class="choice-seg" role="group" aria-label="Enrichment stage" data-choice-group="enrich-stage" data-hint-target="enrich-stage-hint">
+          <button type="button" class="choice-seg-btn is-active" data-choice="enable" data-hint="Look up NVD / EPSS and, if configured, rewrite the description with AI. Then match the CVE against Internal systems." aria-pressed="true">Enable</button>
+          <button type="button" class="choice-seg-btn" data-choice="disable" data-hint="Skip NVD, EPSS, and AI. After extract, go straight to matching the ingested CVE against Internal systems." aria-pressed="false">Disable</button>
+        </div>
+      </div>
+      <div class="settings-form">
+        <p class="choice-hint muted" id="enrich-stage-hint">Look up NVD / EPSS and, if configured, rewrite the description with AI. Then match the CVE against Internal systems.</p>
+        <p class="muted">Internet intel URLs and AI keys stay saved either way. They are used only while this stage is enabled.</p>
+        <div class="filters">
+          <button class="btn" type="submit">Save</button>
+          <a class="btn-ghost" href="#intel">Internet intel</a>
+          <a class="btn-ghost" href="#ai">AI modules</a>
+        </div>
+        <p class="muted" id="enrich-stage-status"></p>
+      </div>
+      </form>
+    </section>
+
+    <section class="panel settings-panel tab-panel" data-panel="intel">
+      <div class="panel-head"><h2>Internet intel</h2></div>
+      <form id="enrich-form" class="settings-form">
+        <p class="muted" id="intel-enrich-off-note" hidden>Enrichment is disabled. NVD, EPSS, and AI will not run until you enable the stage on the Enrichment tab. You can still save URLs and keys here.</p>
+        <p class="muted">Built-in lookup sources are created on install. Change the URL, turn lookup on or off, add another endpoint, or delete a source. Nothing is called until Enrichment is on and the source’s Enable lookup switch is on.</p>
+        <div id="intel-source-list" class="intel-source-list"></div>
+        <div class="filters">
+          <button class="btn-ghost" type="button" id="intel-source-add">Add intel source</button>
+          <button class="btn-ghost" type="button" id="intel-source-restore">Restore NVD &amp; EPSS</button>
+        </div>
+        <label>Ignore CVEs published before
+          <input class="input" id="intel-start" type="date" value="2024-01-01" />
+        </label>
+        <p class="muted">Applies to NVD, ATOM feeds, Local, SMB, and mail. CVE IDs whose year is earlier than this date are skipped.</p>
+        <div class="filters">
+          <button class="btn" type="submit">Save</button>
+        </div>
+        <p class="muted" id="enrich-status"></p>
+      </form>
+    </section>
+
+    <section class="panel settings-panel tab-panel" data-panel="ai">
+      <form id="ai-form">
+      <div class="panel-head">
+        <div class="panel-head-copy">
+          <h2>AI modules</h2>
+          <p class="muted">Optional. Runs only while Enrichment is enabled.</p>
+        </div>
+        <div class="choice-seg" role="group" aria-label="Enrichment mode" data-choice-group="ai-enrichment-mode" data-hint-target="ai-mode-hint">
+          <button type="button" class="choice-seg-btn is-active" data-choice="direct" data-hint="The selected provider rewrites the CVE into a clear owner-facing description for Jira, and fills missing fields after NVD/EPSS." aria-pressed="true">EVulnTasker AI</button>
+          <button type="button" class="choice-seg-btn" data-choice="org_llm" data-hint="Enrichment comes from internet feeds (NVD/EPSS). AI is not used to enrich — data is prepared for your org LLM to analyze separately." aria-pressed="false">Org LLM only</button>
+        </div>
+      </div>
+      <div class="settings-form">
+        <p class="choice-hint muted" id="ai-mode-hint">The selected provider rewrites the CVE into a clear owner-facing description for Jira, and fills missing fields after NVD/EPSS.</p>
+        <ol class="muted muted-list">
+          <li>Turn Enrichment on in the Enrichment tab, or the pipeline skips this stage and matches ingested fields against Internal systems.</li>
+          <li>When enrichment is on, Python (NVD + EPSS) runs first for scores and structured fields.</li>
+          <li>If a provider is enabled with a key and mode is EVulnTasker AI, the model rewrites the CVE description so owners can see what the vulnerability does — and fills any missing vendor/product fields.</li>
+          <li>If the module is off, has no key, or mode is Org LLM only, the NVD/ingest wording is kept and used in Jira as-is.</li>
+        </ol>
+
+        <div class="settings-subtabs" role="tablist" aria-label="AI providers">
+          <button class="settings-subtab is-active" type="button" data-subtab="gemini" data-group="ai">Google Gemini</button>
+          <button class="settings-subtab" type="button" data-subtab="chatgpt" data-group="ai">ChatGPT</button>
+          <button class="settings-subtab" type="button" data-subtab="azure_openai" data-group="ai">Azure OpenAI</button>
+          <button class="settings-subtab" type="button" data-subtab="github_copilot" data-group="ai">GitHub Copilot</button>
+        </div>
+        <p class="muted">Only one AI module can be enabled. Turning another on disables the previous one.</p>
+
+        <input type="hidden" id="ai-provider" value="gemini" />
+
+        <div class="subtab-panel is-active" data-subpanel="gemini" data-group="ai">
+          <div class="settings-enable-bar is-inset">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="ai-enabled-gemini" data-ai-provider="gemini" /><span>Enable Google Gemini</span></label>
+          </div>
+          <p class="muted" id="ai-provider-desc-gemini">Google Gemini via OpenAI-compatible API. Get an API key from Google AI Studio.</p>
+        </div>
+        <div class="subtab-panel" data-subpanel="chatgpt" data-group="ai">
+          <div class="settings-enable-bar is-inset">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="ai-enabled-chatgpt" data-ai-provider="chatgpt" /><span>Enable ChatGPT</span></label>
+          </div>
+          <p class="muted" id="ai-provider-desc-chatgpt">OpenAI ChatGPT via the official API. Requires an API key from platform.openai.com. A ChatGPT website login or Plus subscription is not an API key — this app cannot call ChatGPT without a key.</p>
+        </div>
+        <div class="subtab-panel" data-subpanel="azure_openai" data-group="ai">
+          <div class="settings-enable-bar is-inset">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="ai-enabled-azure_openai" data-ai-provider="azure_openai" /><span>Enable Azure OpenAI</span></label>
+          </div>
+          <p class="muted" id="ai-provider-desc-azure_openai">Azure OpenAI deployment. Use your resource endpoint and deployment name in the API base URL.</p>
+        </div>
+        <div class="subtab-panel" data-subpanel="github_copilot" data-group="ai">
+          <div class="settings-enable-bar is-inset">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="ai-enabled-github_copilot" data-ai-provider="github_copilot" /><span>Enable GitHub Copilot</span></label>
+          </div>
+          <p class="muted settings-desc" id="ai-provider-desc-github_copilot">GitHub Copilot or enterprise endpoint. Requires an organization token with Copilot access.</p>
+        </div>
+
+        <div id="ai-connection-fields">
+        <label>API base
+          <input class="input" id="ai-base" placeholder="https://generativelanguage.googleapis.com/v1beta/openai" />
+        </label>
+        <label>Model / deployment
+          <input class="input" id="ai-model" placeholder="gemini-1.5-flash" />
+        </label>
+        <label>API key
+          <input class="input" id="ai-key" type="password" placeholder="unchanged if left blank" />
+          <span class="muted" id="ai-key-hint"></span>
+        </label>
+        </div>
+        <div class="filters">
+          <button class="btn" type="submit">Save</button>
+        </div>
+        <p class="muted" id="ai-status"></p>
+      </div>
+      </form>
+    </section>
+
+    <section class="panel settings-panel tab-panel" data-panel="assets">
+      <div class="panel-head">
+        <h2>Inventory APIs</h2>
+        <p class="muted">Coming later. For now, Internal systems is filled by hand or CSV on the <a class="link" href="/inventory">Internal systems</a> page. These APIs will teach the catalog from CMDB / Sonatype / ITNM when that work starts.</p>
+      </div>
+      <div class="settings-subtabs" role="tablist" aria-label="Asset APIs">
+        <button class="settings-subtab is-active" type="button" data-subtab="cmdb" data-group="assets">CMDB</button>
+        <button class="settings-subtab" type="button" data-subtab="sonatype" data-group="assets">Sonatype</button>
+        <button class="settings-subtab" type="button" data-subtab="itnm" data-group="assets">ITNM / Discovery</button>
+      </div>
+
+      <div class="subtab-panel is-active" data-subpanel="cmdb" data-group="assets">
+        <div class="subtab-head"><h3>Local CMDB</h3></div>
+        <form id="cmdb-form" class="settings-form settings-fields">
+          <div class="settings-enable-bar">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="cmdb-enabled" /><span>Enable CMDB integration</span></label>
+          </div>
+          <p class="settings-desc muted">Pull the full asset list into the local catalog. Matching does not call this API per CVE.</p>
+          <label>Server / host <input class="input" id="cmdb-host" placeholder="cmdb.corp.local" /></label>
+          <label>Port <input class="input" id="cmdb-port" type="number" min="1" max="65535" value="443" /></label>
+          <label class="switch"><input type="checkbox" id="cmdb-use-tls" checked /><span>Use TLS (HTTPS)</span></label>
+          <label class="switch"><input type="checkbox" id="cmdb-ignore-cert" /><span>Ignore invalid/expired certificate</span></label>
+          <label>API path prefix <input class="input" id="cmdb-api-path" placeholder="/api" value="/api" /></label>
+          <label>Username <input class="input" id="cmdb-username" autocomplete="off" /></label>
+          <label>Password / token
+            <input class="input" id="cmdb-password" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
+            <span class="muted" id="cmdb-password-hint"></span>
+          </label>
+          <div class="filters">
+            <button class="btn" type="submit">Save</button>
+            <button class="btn-ghost" type="button" id="cmdb-test">Test connection</button>
+          </div>
+          <p class="muted" id="cmdb-status"></p>
+        </form>
+      </div>
+
+      <div class="subtab-panel" data-subpanel="sonatype" data-group="assets">
+        <div class="subtab-head"><h3>Sonatype / Nexus</h3></div>
+        <form id="sonatype-form" class="settings-form settings-fields">
+          <div class="settings-enable-bar">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="sonatype-enabled" /><span>Enable Sonatype integration</span></label>
+          </div>
+          <p class="settings-desc muted">Sync applications and components from Sonatype Nexus Lifecycle / IQ into the local catalog.</p>
+          <label>Server / host <input class="input" id="sonatype-host" placeholder="nexus.corp.local" /></label>
+          <label>Port <input class="input" id="sonatype-port" type="number" min="1" max="65535" value="443" /></label>
+          <label class="switch"><input type="checkbox" id="sonatype-use-tls" checked /><span>Use TLS (HTTPS)</span></label>
+          <label class="switch"><input type="checkbox" id="sonatype-ignore-cert" /><span>Ignore invalid/expired certificate</span></label>
+          <label>API path prefix <input class="input" id="sonatype-api-path" placeholder="" /></label>
+          <label>Username <input class="input" id="sonatype-username" autocomplete="off" /></label>
+          <label>Password / token
+            <input class="input" id="sonatype-password" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
+            <span class="muted" id="sonatype-password-hint"></span>
+          </label>
+          <div class="filters">
+            <button class="btn" type="submit">Save</button>
+            <button class="btn-ghost" type="button" id="sonatype-test">Test connection</button>
+          </div>
+          <p class="muted" id="sonatype-status"></p>
+        </form>
+      </div>
+
+      <div class="subtab-panel" data-subpanel="itnm" data-group="assets">
+        <div class="subtab-head"><h3>ITNM / network discovery</h3></div>
+        <form id="itnm-form" class="settings-form settings-fields">
+          <div class="settings-enable-bar">
+            <label class="switch settings-enable-switch"><input type="checkbox" id="itnm-enabled" /><span>Enable ITNM / discovery sync</span></label>
+          </div>
+          <p class="settings-desc muted">IBM Tivoli Network Manager or a similar discovery API. Devices are synced into the local catalog (vendor, product, type, version).</p>
+          <label>Server / host <input class="input" id="itnm-host" placeholder="itnm.corp.local" /></label>
+          <label>Port <input class="input" id="itnm-port" type="number" min="1" max="65535" value="443" /></label>
+          <label class="switch"><input type="checkbox" id="itnm-use-tls" checked /><span>Use TLS (HTTPS)</span></label>
+          <label class="switch"><input type="checkbox" id="itnm-ignore-cert" /><span>Ignore invalid/expired certificate</span></label>
+          <label>API path prefix <input class="input" id="itnm-api-path" placeholder="/api" value="/api" /></label>
+          <label>List path <input class="input" id="itnm-list-path" placeholder="/devices" value="/devices" /></label>
+          <label>Username <input class="input" id="itnm-username" autocomplete="off" /></label>
+          <label>Password / token
+            <input class="input" id="itnm-password" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
+            <span class="muted" id="itnm-password-hint"></span>
+          </label>
+          <div class="filters">
+            <button class="btn" type="submit">Save</button>
+            <button class="btn-ghost" type="button" id="itnm-test">Test connection</button>
+          </div>
+          <p class="muted" id="itnm-status"></p>
+        </form>
+      </div>
+    </section>
+
+    <section class="panel settings-panel tab-panel" data-panel="ticketing">
+      <div class="panel-head">
+        <h2>Ticketing</h2>
+        <p class="muted">Open owner and threat-hunting tasks in Jira, Monday.com, email (SMTP mail relay), or an internal CRM.</p>
+      </div>
+      <form id="ticket-form" class="settings-form settings-fields">
+        <div class="settings-enable-bar">
+          <label class="switch settings-enable-switch"><input type="checkbox" id="ticketing-enabled" /><span>Enable ticketing integration</span></label>
+        </div>
+
+        <div class="settings-subtabs" role="tablist" aria-label="Ticketing providers">
+          <button class="settings-subtab is-active" type="button" data-subtab="jira" data-group="ticketing">Jira</button>
+          <button class="settings-subtab" type="button" data-subtab="monday" data-group="ticketing">Monday.com</button>
+          <button class="settings-subtab" type="button" data-subtab="email" data-group="ticketing">Email (mail relay)</button>
+          <button class="settings-subtab" type="button" data-subtab="custom" data-group="ticketing">Internal CRM</button>
+        </div>
+        <input type="hidden" id="ticketing-provider" value="jira" />
+
+        <div id="ticketing-http-fields">
+        <p class="settings-desc muted">Connection settings shared by all providers (except Monday.com API host).</p>
+        <label>Server / host <input class="input" id="ticketing-host" placeholder="jira.corp.local" /></label>
+        <label>Port <input class="input" id="ticketing-port" type="number" min="1" max="65535" value="443" /></label>
+        <label class="switch"><input type="checkbox" id="ticketing-use-tls" checked /><span>Use TLS (HTTPS)</span></label>
+        <label class="switch"><input type="checkbox" id="ticketing-ignore-cert" /><span>Ignore invalid/expired certificate</span></label>
+        <label>Username <input class="input" id="ticketing-username" autocomplete="off" /></label>
+        <label>Password / API token
+          <input class="input" id="ticketing-password" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
+          <span class="muted" id="ticketing-password-hint"></span>
+        </label>
+        </div>
+
+        <div class="subtab-panel is-active" data-subpanel="jira" data-group="ticketing">
+          <label>Jira user email <input class="input" id="jira-email" placeholder="evulntasker@corp.local" /></label>
+          <label>Owner project key <input class="input" id="jira-project" placeholder="VULN" /></label>
+          <label>Hunt project key <input class="input" id="jira-hunt" placeholder="HUNT" /></label>
+          <label>Issue type <input class="input" id="jira-type" placeholder="Task" /></label>
+        </div>
+        <div class="subtab-panel" data-subpanel="monday" data-group="ticketing">
+          <label>Board ID <input class="input" id="monday-board" placeholder="1234567890" /></label>
+          <label>Group ID <input class="input" id="monday-group" placeholder="topics" /></label>
+          <p class="muted">Monday.com uses api.monday.com — put your API token in the password field above.</p>
+        </div>
+        <div class="subtab-panel" data-subpanel="email" data-group="ticketing">
+          <p class="muted">Lab / external mail: send owner and hunt tasks through an SMTP mail relay (Postfix, Exchange connector, or any SMTP smart host). Recipients can be any address the relay is allowed to send to.</p>
+          <p class="muted">Owner tasks go to <code>owner_email</code> on each matched Internal system — not one shared mailbox. Hunt tasks go to the hunt address below. Design the mail body in the <a class="link" href="#message">Message</a> tab using AI JSON field names.</p>
+          <h3 class="subhead">Mail relay</h3>
+          <label>SMTP host <input class="input" id="smtp-host" placeholder="relay.corp.local" autocomplete="off" /></label>
+          <label>Port <input class="input" id="smtp-port" type="number" min="1" max="65535" value="25" /></label>
+          <p class="muted" id="smtp-tls-hint">Plain SMTP on port 25. Use STARTTLS (587) or SMTPS (465) when the relay requires encryption.</p>
+          <div class="choice-seg" role="group" aria-label="SMTP encryption" data-choice-group="smtp-tls" data-hint-target="smtp-tls-hint">
+            <button type="button" class="choice-seg-btn is-active" data-choice="plain" data-hint="No encryption. Typical internal lab relay on port 25." aria-pressed="true">Plain</button>
+            <button type="button" class="choice-seg-btn" data-choice="starttls" data-hint="STARTTLS after connect. Usual for port 587." aria-pressed="false">STARTTLS</button>
+            <button type="button" class="choice-seg-btn" data-choice="ssl" data-hint="SMTPS from the start. Usual for port 465." aria-pressed="false">SMTPS</button>
+          </div>
+          <label class="switch"><input type="checkbox" id="smtp-ignore-cert" /><span>Ignore invalid/expired TLS certificate</span></label>
+          <label>Username (optional) <input class="input" id="smtp-username" autocomplete="off" /></label>
+          <label>Password (optional)
+            <input class="input" id="smtp-password" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
+            <span class="muted" id="smtp-password-hint"></span>
+          </label>
+          <label>From address <input class="input" id="smtp-from" placeholder="evulntasker@corp.local" /></label>
+          <h3 class="subhead">Recipients</h3>
+          <label>Hunt team email
+            <input class="input" id="ticket-hunt-email" placeholder="threat-hunting@corp.local" />
+          </label>
+          <label>Fallback owner email
+            <input class="input" id="ticket-owner-email" placeholder="soc@corp.local" />
+            <span class="muted">Used only when a matched Internal system has a blank owner_email. Leave blank to skip those systems.</span>
+          </label>
+        </div>
+        <div class="subtab-panel" data-subpanel="custom" data-group="ticketing">
+          <label>API path <input class="input" id="custom-api-path" placeholder="/api/tickets" value="/api/tickets" /></label>
+          <label>Owner project key <input class="input" id="custom-owner-project" placeholder="VULN" /></label>
+          <label>Hunt project key <input class="input" id="custom-hunt-project" placeholder="HUNT" /></label>
+        </div>
+
+        <div class="filters">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn-ghost" type="button" id="ticketing-test">Test connection</button>
+        </div>
+        <p class="muted" id="ticket-status"></p>
+      </form>
+    </section>
+
+    <section class="panel settings-panel tab-panel" data-panel="message">
+      <div class="panel-head">
+        <h2>Notification message</h2>
+        <p class="muted">Layout of the owner and hunt emails. The AI enrichment step returns JSON; each JSON key can be placed in the message as <code>{{ '{{name}}' }}</code>.</p>
+      </div>
+      <form id="message-form" class="settings-form settings-fields">
+        <p class="muted">Click a field name to insert it at the cursor. Extra keys the model returns also work, using the same <code>{{ '{{key}}' }}</code> syntax.</p>
+        <div class="token-chips" id="message-tokens" aria-label="AI JSON fields"></div>
+        <label>Owner subject
+          <input class="input mono" id="msg-owner-subject" data-tpl />
+        </label>
+        <label>Owner body
+          <textarea class="input tpl-textarea" id="msg-owner-body" rows="12" data-tpl></textarea>
+        </label>
+        <label>Hunt subject
+          <input class="input mono" id="msg-hunt-subject" data-tpl />
+        </label>
+        <label>Hunt body
+          <textarea class="input tpl-textarea" id="msg-hunt-body" rows="12" data-tpl></textarea>
+        </label>
+        <div class="filters">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn-ghost" type="button" id="message-preview">Preview with sample JSON</button>
+        </div>
+        <p class="muted" id="message-status"></p>
+        <pre class="tpl-preview" id="message-preview-box" hidden></pre>
+      </form>
+    </section>
+  </div>
+
+  <div class="confirm-overlay" id="reset-modal" hidden role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
+    <div class="confirm-card">
+      <div class="confirm-icon" aria-hidden="true">!</div>
+      <h2 id="reset-modal-title">This will delete all table data</h2>
+      <p class="confirm-lead">Are you sure you want to continue?</p>
+      <p class="muted">This cannot be undone. Every row in these tables will be permanently removed:</p>
+      <ul class="wipe-list">
+        <li><strong>Internal systems</strong> — organization products</li>
+        <li><strong>Incoming CVEs</strong> — ingested and entered vulnerabilities, pipeline history, tickets, and detections</li>
+      </ul>
+      <p class="muted">Database connection, input sources, and integration settings are kept.</p>
+      <div class="confirm-actions">
+        <button class="btn-ghost" type="button" id="reset-modal-cancel">Cancel</button>
+        <button class="btn-danger" type="button" id="reset-modal-confirm">Yes, reset the system</button>
+      </div>
+    </div>
+  </div>
+  <template id="tpl-atom-feed-row">
+    <div class="atom-feed-row">
+      <input class="input atom-feed-name" placeholder="Label (optional)" />
+      <input class="input atom-feed-url" placeholder="https://vendor.example/atom.xml" />
+      <input type="hidden" class="atom-feed-type" value="atom" />
+      <button class="icon-btn atom-feed-remove" type="button" title="Remove feed">✕</button>
+    </div>
+  </template>
+  <template id="tpl-intel-source">
+    <div class="intel-source-card" data-intel-card>
+      <div class="smb-location-head">
+        <input class="input intel-name" placeholder="Source name" />
+        <button class="icon-btn intel-remove" type="button" title="Remove source">✕</button>
+      </div>
+      <input type="hidden" class="intel-id" value="" />
+      <label>Type
+        <select class="input intel-type">
+          <option value="nvd">NVD 2.0</option>
+          <option value="epss">FIRST EPSS</option>
+        </select>
+      </label>
+      <label>URL <input class="input intel-url" placeholder="https://" /></label>
+      <label class="switch"><input type="checkbox" class="intel-enabled" /><span>Enable lookup</span></label>
+      <label class="intel-key-wrap">API key (optional)
+        <input class="input intel-key" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
+        <span class="muted intel-key-hint"></span>
+      </label>
+    </div>
+  </template>
+  <template id="tpl-smb-location">
+    <div class="smb-location-card">
+      <div class="smb-location-head">
+        <input class="input smb-loc-name" placeholder="Label (optional)" />
+        <button class="icon-btn smb-location-remove" type="button" title="Remove location">✕</button>
+      </div>
+      <div class="smb-location-fields">
+        <input class="input smb-loc-server" placeholder="fileserver.corp.local" />
+        <input class="input smb-loc-share" placeholder="Share name" />
+        <input class="input smb-loc-path" placeholder="Folder inside the share" />
+      </div>
+    </div>
+  </template>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/settings.js?v={{ version }}-atom3"></script>
+{% endblock %}

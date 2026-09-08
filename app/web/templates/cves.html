@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Incoming CVEs{% endblock %}
+{% block heading %}Incoming CVEs{% endblock %}
+{% block lede %}Database of CVEs received by EVulnTasker. Matching later compares vendor, product, type, and version against Internal systems.{% endblock %}
+{% block actions %}
+  <a class="btn-ghost" href="/inventory">Internal systems</a>
+  <a class="btn-ghost" href="/status">Status</a>
+{% endblock %}
+{% block content %}
+  <section class="panel">
+    <div class="panel-head">
+      <h2>CVE database</h2>
+      <div class="filters">
+        <input id="cve-filter" class="input" placeholder="Filter by name, vendor, product…" />
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>Vulnerability</th>
+            <th>Description</th>
+            <th>Vendor</th>
+            <th>Product</th>
+            <th>Product type</th>
+            <th>Product version</th>
+            <th>Severity</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody id="cve-tbody">
+          <tr><td colspan="8" class="empty">Loading CVEs…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <template id="tpl-cve-row">
+    <tr class="clickable">
+      <td class="mono">
+        <a class="link" data-slot="cve-link"></a>
+      </td>
+      <td class="cell-desc" data-slot="description"></td>
+      <td data-slot="vendor"></td>
+      <td data-slot="product"></td>
+      <td data-slot="product-type"></td>
+      <td class="mono" data-slot="version"></td>
+      <td data-slot="severity"></td>
+      <td data-slot="source"></td>
+    </tr>
+  </template>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/cves.js?v={{ version }}-idonly"></script>
+{% endblock %}

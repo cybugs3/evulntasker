@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Status{% endblock %}
+{% block heading %}Status{% endblock %}
+{% block lede %}Live CVE queue: stage, run status, priority, owner team, and ticketing.{% endblock %}
+{% block actions %}
+  <button class="btn-ghost" id="refresh-btn" type="button">Refresh</button>
+{% endblock %}
+{% block content %}
+  <section class="dash-layout">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Vulnerability repository</h2>
+        <div class="filters">
+          <input id="table-search" class="input" placeholder="Search CVE, source, team…" />
+          <select id="status-filter" class="input">
+            <option value="">All stages</option>
+            <option value="INGESTED">Ingest</option>
+            <option value="EXTRACTED">Extract</option>
+            <option value="ENRICHED">Enrichment</option>
+            <option value="MATCHED">Asset match</option>
+            <option value="AI_FALLBACK">AI fallback</option>
+            <option value="ACTIONED">Completed</option>
+            <option value="FAILED">Failed</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Information source</th>
+              <th>Current stage</th>
+              <th>Status</th>
+              <th>Priority</th>
+              <th>Target team</th>
+              <th>Jira link</th>
+            </tr>
+          </thead>
+          <tbody id="vuln-tbody">
+            <tr><td colspan="7" class="empty">Loading repository…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <aside class="panel integ-pane">
+      <div class="panel-head"><h2>Integration status</h2></div>
+      <ul class="integ-list" id="integ-list">
+        <li class="muted">Loading integrations…</li>
+      </ul>
+    </aside>
+  </section>
+  <template id="tpl-status-row">
+    <tr class="clickable">
+      <td class="mono"><a class="link" data-slot="cve-link"></a></td>
+      <td data-slot="source"></td>
+      <td data-slot="stage"></td>
+      <td data-slot="run"></td>
+      <td data-slot="priority"></td>
+      <td data-slot="team"></td>
+      <td data-slot="jira"></td>
+    </tr>
+  </template>
+  <template id="tpl-integ-item">
+    <li>
+      <span class="dot" data-slot="dot"></span>
+      <span data-slot="name"></span>
+      <span class="muted" data-slot="state"></span>
+    </li>
+  </template>
+  <template id="tpl-integ-empty">
+    <li class="muted">No integrations configured.</li>
+  </template>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/status.js?v={{ version }}"></script>
+{% endblock %}

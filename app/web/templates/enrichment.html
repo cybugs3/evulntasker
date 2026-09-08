@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Enrichment{% endblock %}
+{% block heading %}Enrichment{% endblock %}
+{% block lede %}When Enrichment is on, NVD/EPSS and optional AI fill scores and a clear description. When it is off, the pipeline skips this stage and matches ingested fields against Internal systems.{% endblock %}
+{% block actions %}
+  <a class="btn-ghost" href="/settings#enrichment">Enable / disable enrichment</a>
+  <a class="btn-ghost" href="/settings#intel">Configure NVD / EPSS</a>
+  <a class="btn-ghost" href="/settings#ai">Configure AI</a>
+{% endblock %}
+{% block content %}
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Enrichment queue</h2>
+      <p class="muted">When Enrichment is enabled in Settings, Python calls NVD then EPSS, then optional AI. When it is disabled, this queue stays empty and matching runs on ingested fields.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>CVE</th>
+            <th>Vendor / product</th>
+            <th>CVSS / EPSS</th>
+            <th>Vector</th>
+            <th>Missing</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="stage-tbody">
+          <tr><td colspan="6" class="empty">Loading enrichment queue…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <template id="tpl-enrich-row">
+    <tr class="clickable">
+      <td class="mono"><a class="link" data-slot="cve-link"></a></td>
+      <td data-slot="product"></td>
+      <td data-slot="scores"></td>
+      <td data-slot="vector"></td>
+      <td data-slot="missing"></td>
+      <td data-slot="method"></td>
+    </tr>
+  </template>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/stage.js?v={{ version }}" data-stage="enrichment"></script>
+{% endblock %}

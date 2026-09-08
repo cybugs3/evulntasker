@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Vulnerability Repositories{% endblock %}
+{% block heading %}Vulnerability Repositories{% endblock %}
+{% block lede %}NVD/EPSS lookups plus built-in ATOM ingest feeds. Those ATOM interfaces are also listed under Settings → Feeds, where you can edit or delete them.{% endblock %}
+{% block actions %}
+  <a class="btn-ghost" href="/settings#intel">Internet intel</a>
+  <a class="btn-ghost" href="/settings#feeds/web">ATOM feeds</a>
+{% endblock %}
+{% block content %}
+  <section class="panel">
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>Feed</th>
+            <th>Type</th>
+            <th>Endpoint</th>
+            <th>Status</th>
+            <th>Last sync</th>
+            <th>Raw count</th>
+            <th>Enabled</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="repo-tbody">
+          <tr><td colspan="8" class="empty">Loading repositories…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <template id="tpl-repo-row">
+    <tr>
+      <td>
+        <strong data-slot="name"></strong>
+        <div class="muted" data-slot="notes"></div>
+      </td>
+      <td data-slot="type"></td>
+      <td class="mono" data-slot="endpoint"></td>
+      <td data-slot="status"></td>
+      <td data-slot="synced"></td>
+      <td class="mono" data-slot="count"></td>
+      <td data-slot="enabled"></td>
+      <td>
+        <button class="btn btn-ghost btn-sm" type="button" data-sync>Sync now</button>
+        <button class="btn btn-ghost btn-sm" type="button" data-toggle data-slot="toggle"></button>
+      </td>
+    </tr>
+  </template>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/repositories.js?v={{ version }}-atom1"></script>
+{% endblock %}

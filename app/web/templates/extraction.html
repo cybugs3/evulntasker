@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Extraction{% endblock %}
+{% block heading %}Extraction{% endblock %}
+{% block lede %}CVE IDs taken from ingested files and feeds.{% endblock %}
+{% block actions %}
+  <a class="btn-ghost" href="/settings#ai">AI fallback settings</a>
+{% endblock %}
+{% block content %}
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Recent ingest events</h2>
+      <p class="muted">One row per CVE. Already-known IDs are not listed again.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>File</th>
+            <th>CVE IDs</th>
+            <th>Status</th>
+            <th>Received</th>
+          </tr>
+        </thead>
+        <tbody id="event-tbody">
+          <tr><td colspan="5" class="empty">Loading extraction queue…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="panel-head"><h2>CVE records at this stage</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>CVE</th>
+            <th>Source</th>
+            <th>Status</th>
+            <th>AI used</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody id="stage-tbody">
+          <tr><td colspan="5" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <template id="tpl-extract-event">
+    <tr>
+      <td data-slot="source"></td>
+      <td class="mono" data-slot="filename"></td>
+      <td data-slot="cves"></td>
+      <td data-slot="status"></td>
+      <td data-slot="received"></td>
+    </tr>
+  </template>
+  <template id="tpl-extract-row">
+    <tr class="clickable">
+      <td class="mono"><a class="link" data-slot="cve-link"></a></td>
+      <td data-slot="source"></td>
+      <td data-slot="status"></td>
+      <td data-slot="ai"></td>
+      <td data-slot="updated"></td>
+    </tr>
+  </template>
+  <template id="tpl-cve-link">
+    <a class="link mono" data-slot="link"></a>
+  </template>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/stage.js?v={{ version }}" data-stage="extraction"></script>
+{% endblock %}

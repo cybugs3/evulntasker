@@ -1,0 +1,24 @@
+[Unit]
+Description=EVulnTasker Vulnerability Management Platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=guy
+Group=guy
+WorkingDirectory=/home/guy/peoj
+Environment=PYTHONPATH=/home/guy/peoj
+Environment=VULNINTEL_ENV=production
+EnvironmentFile=-/home/guy/peoj/.env
+ExecStart=/home/guy/peoj/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --log-level info
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+# systemd captures stdout/stderr into the journal; file logs still go to LOG_DIR.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=evulntasker
+
+[Install]
+WantedBy=multi-user.target

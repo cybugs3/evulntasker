@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Dashboard{% endblock %} · {{ app_name }} {{ version_label }}</title>
+  <link rel="icon" type="image/png" href="/static/img/evulntasker-icon.png" />
+  <link rel="stylesheet" href="/static/css/app.css?v={{ version }}-topbar1" />
+</head>
+{% set path = request.url.path if request is defined else '' %}
+{% set nav = active|default('') %}
+<body class="sidebar-open{% if nav == 'dashboard' %} page-main{% endif %}">
+  <header class="app-header">
+    <a class="brand" href="/">
+      <div class="brand-mark">
+        <img src="/static/img/evulntasker-icon.png" alt="EVulnTasker" />
+      </div>
+      <div class="brand-copy">
+        <div class="brand-title-row">
+          <div class="brand-name">{{ app_name }} {{ version_label }}</div>
+          <span class="rbvm-badge">AI-Powered RBVM</span>
+        </div>
+        <div class="brand-tagline">{{ tagline }}</div>
+      </div>
+    </a>
+    <div class="header-tools">
+      <div class="notify-wrap">
+        <button class="header-btn" type="button" id="notify-btn" aria-expanded="false" title="Notifications">
+          <span class="bell" aria-hidden="true">🔔</span>
+          <span class="notify-badge" id="notify-badge" hidden>0</span>
+        </button>
+        <div class="notify-panel" id="notify-panel" hidden>
+          <div class="notify-head">Notifications</div>
+          <ul class="notify-list" id="notify-list">
+            <li class="muted">Loading…</li>
+          </ul>
+        </div>
+      </div>
+      <template id="tpl-notify-item">
+        <li><a data-slot="link"></a></li>
+      </template>
+      <template id="tpl-notify-empty">
+        <li class="muted" data-slot="text"></li>
+      </template>
+      <button class="profile-btn" type="button" id="profile-btn" title="Operator">
+        <span>OP</span>
+      </button>
+    </div>
+  </header>
+  <div class="app-body">
+  <div class="nav-rail">
+    <nav class="rail-nav" aria-label="Collapsed navigation">
+      <a class="nav-item {% if nav == 'dashboard' or path == '/' %}is-active{% endif %}" href="/" title="Main">
+        <span class="nav-icon">◈</span><span class="nav-label">Main</span>
+      </a>
+      <a class="nav-item {% if nav == 'status' or path.startswith('/status') %}is-active{% endif %}" href="/status" title="Status">
+        <span class="nav-icon">◉</span><span class="nav-label">Status</span>
+      </a>
+      <a class="nav-item {% if nav == 'inventory' or path.startswith('/inventory') %}is-active{% endif %}" href="/inventory" title="Internal systems">
+        <span class="nav-icon">▦</span><span class="nav-label">Internal systems</span>
+      </a>
+      <a class="nav-item {% if nav == 'cves' or path.startswith('/cves') %}is-active{% endif %}" href="/cves" title="Incoming CVEs">
+        <span class="nav-icon">☰</span><span class="nav-label">Incoming CVEs</span>
+      </a>
+      <a class="nav-item {% if nav == 'sources' or path.startswith('/sources') or path.startswith('/feeds') %}is-active{% endif %}" href="/sources" title="Input Sources">
+        <span class="nav-icon">⬡</span><span class="nav-label">Input Sources</span>
+      </a>
+      <a class="nav-item {% if nav == 'extraction' or path.startswith('/extraction') %}is-active{% endif %}" href="/extraction" title="Extraction">
+        <span class="nav-icon">⌕</span><span class="nav-label">Extraction</span>
+      </a>
+      <a class="nav-item {% if nav == 'enrichment' or path.startswith('/enrichment') %}is-active{% endif %}" href="/enrichment" title="Enrichment">
+        <span class="nav-icon">◇</span><span class="nav-label">Enrichment</span>
+      </a>
+      <a class="nav-item {% if nav == 'matching' or path.startswith('/matching') %}is-active{% endif %}" href="/matching" title="Asset matching">
+        <span class="nav-icon">⊞</span><span class="nav-label">Asset matching</span>
+      </a>
+      <a class="nav-item {% if nav == 'actions' or path.startswith('/actions') %}is-active{% endif %}" href="/actions" title="Actions">
+        <span class="nav-icon">✓</span><span class="nav-label">Actions</span>
+      </a>
+      <a class="nav-item {% if nav == 'tracker' or path.startswith('/tracker') %}is-active{% endif %}" href="/tracker" title="CVE Tracker">
+        <span class="nav-icon">◎</span><span class="nav-label">CVE Tracker</span>
+      </a>
+      <a class="nav-item {% if nav == 'repositories' or path.startswith('/repositories') %}is-active{% endif %}" href="/repositories" title="Repositories">
+        <span class="nav-icon">▣</span><span class="nav-label">Repositories</span>
+      </a>
+      <a class="nav-item {% if nav == 'settings' or path.startswith('/settings') %}is-active{% endif %}" href="/settings" title="Settings">
+        <span class="nav-icon">⚙</span><span class="nav-label">Settings</span>
+      </a>
+      <a class="nav-item {% if nav == 'debug' or path.startswith('/debug') %}is-active{% endif %}" href="/debug" title="Debugger">
+        <span class="nav-icon">⚒</span><span class="nav-label">Debugger</span>
+      </a>
+    </nav>
+    <button class="collapse-btn js-sidebar-toggle" type="button" aria-controls="app-sidebar" aria-expanded="false" title="Expand navigation">
+      <span class="chevron" aria-hidden="true">››</span>
+    </button>
+  </div>
+  <aside class="sidebar" id="app-sidebar">
+    <nav class="nav">
+      <div class="nav-group">Overview Dashboards</div>
+      <a class="nav-item {% if nav == 'dashboard' or path == '/' %}is-active{% endif %}" href="/">
+        <span class="nav-icon">◈</span> <span class="nav-label">Main</span>
+      </a>
+      <a class="nav-item {% if nav == 'status' or path.startswith('/status') %}is-active{% endif %}" href="/status">
+        <span class="nav-icon">◉</span> <span class="nav-label">Status</span>
+      </a>
+      <div class="nav-group">Databases</div>
+      <a class="nav-item {% if nav == 'inventory' or path.startswith('/inventory') %}is-active{% endif %}" href="/inventory">
+        <span class="nav-icon">▦</span> <span class="nav-label">Internal systems</span>
+      </a>
+      <a class="nav-item {% if nav == 'cves' or path.startswith('/cves') %}is-active{% endif %}" href="/cves">
+        <span class="nav-icon">☰</span> <span class="nav-label">Incoming CVEs</span>
+      </a>
+      <div class="nav-group">Pipeline</div>
+      <a class="nav-item {% if nav == 'sources' or path.startswith('/sources') or path.startswith('/feeds') %}is-active{% endif %}" href="/sources">
+        <span class="nav-icon">⬡</span> <span class="nav-label">Input Sources</span>
+      </a>
+      <a class="nav-item {% if nav == 'extraction' or path.startswith('/extraction') %}is-active{% endif %}" href="/extraction">
+        <span class="nav-icon">⌕</span> <span class="nav-label">Extraction</span>
+      </a>
+      <a class="nav-item {% if nav == 'enrichment' or path.startswith('/enrichment') %}is-active{% endif %}" href="/enrichment">
+        <span class="nav-icon">◇</span> <span class="nav-label">Enrichment</span>
+      </a>
+      <a class="nav-item {% if nav == 'matching' or path.startswith('/matching') %}is-active{% endif %}" href="/matching">
+        <span class="nav-icon">⊞</span> <span class="nav-label">Asset matching</span>
+      </a>
+      <a class="nav-item {% if nav == 'actions' or path.startswith('/actions') %}is-active{% endif %}" href="/actions">
+        <span class="nav-icon">✓</span> <span class="nav-label">Actions</span>
+      </a>
+      <div class="nav-group">Catalog</div>
+      <a class="nav-item {% if nav == 'tracker' or path.startswith('/tracker') %}is-active{% endif %}" href="/tracker">
+        <span class="nav-icon">◎</span> <span class="nav-label">CVE Tracker</span>
+      </a>
+      <a class="nav-item {% if nav == 'repositories' or path.startswith('/repositories') %}is-active{% endif %}" href="/repositories">
+        <span class="nav-icon">▣</span> <span class="nav-label">Repositories</span>
+      </a>
+      <div class="nav-group">System</div>
+      <a class="nav-item {% if nav == 'debug' or path.startswith('/debug') %}is-active{% endif %}" href="/debug">
+        <span class="nav-icon">⚒</span> <span class="nav-label">Debugger</span>
+      </a>
+      <a class="nav-item {% if nav == 'settings' or path.startswith('/settings') %}is-active{% endif %}" href="/settings">
+        <span class="nav-icon">⚙</span> <span class="nav-label">Settings</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div>
+        <div class="env-pill">RHEL service</div>
+        <div class="muted">v{{ version }}</div>
+      </div>
+      <button class="collapse-btn js-sidebar-toggle" type="button" aria-controls="app-sidebar" aria-expanded="true" title="Collapse navigation">
+        <span class="chevron" aria-hidden="true">‹‹</span>
+      </button>
+    </div>
+  </aside>
+
+  <div class="shell">
+    <header class="topbar">
+      <div>
+        <h1>{% block heading %}Dashboard{% endblock %}</h1>
+        <p class="lede">{% block lede %}{% endblock %}</p>
+      </div>
+      <div class="topbar-actions">
+        {% block actions %}{% endblock %}
+      </div>
+    </header>
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  </div>
+  <script src="/static/js/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

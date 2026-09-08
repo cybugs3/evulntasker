@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Main{% endblock %}
+{% block heading %}Main{% endblock %}
+{% block lede %}All pipeline KPIs at a glance. Open Status for the live CVE queue.{% endblock %}
+{% block actions %}
+  <a class="btn-ghost" href="/status">Status</a>
+  <button class="btn-ghost" id="refresh-btn" type="button">Refresh</button>
+{% endblock %}
+{% block content %}
+  <section class="setup-banner setup-banner-compact" id="dash-inv-banner" hidden>
+    <strong>Internal systems database is empty.</strong>
+    <a class="btn" href="/inventory">Add systems</a>
+  </section>
+
+  <div class="main-board">
+    <section class="main-hero" id="kpi-main">
+      <a class="main-tile" href="/status">
+        <div class="kpi-label">Ingested today</div>
+        <div class="kpi-value" data-k="ingested_today">—</div>
+      </a>
+      <a class="main-tile" href="/enrichment">
+        <div class="kpi-label">Pending enrich</div>
+        <div class="kpi-value danger" data-k="pending_enrichment">—</div>
+      </a>
+      <a class="main-tile" href="/matching">
+        <div class="kpi-label">Assets matched</div>
+        <div class="kpi-value ok" data-k="asset_matched">—</div>
+      </a>
+      <a class="main-tile" href="/actions">
+        <div class="kpi-label">Tickets opened</div>
+        <div class="kpi-value" data-k="jira_tasks_created">—</div>
+      </a>
+    </section>
+
+    <div class="main-groups">
+      <section class="main-group">
+        <div class="main-group-head">
+          <h2>Input sources</h2>
+          <a class="link" href="/sources">Open</a>
+        </div>
+        <div class="main-metrics" id="kpi-sources">
+          <a class="main-metric" href="/sources">
+            <div class="kpi-label">Active</div>
+            <div class="kpi-value ok" data-k="active_sources">—</div>
+          </a>
+          <a class="main-metric" href="/sources">
+            <div class="kpi-label">Events (1h)</div>
+            <div class="kpi-value" data-k="recent_events_hour">—</div>
+          </a>
+          <a class="main-metric" href="/sources">
+            <div class="kpi-label">Input rate</div>
+            <div class="kpi-value ok" data-k="avg_rate">—</div>
+          </a>
+          <a class="main-metric" href="/sources">
+            <div class="kpi-label">Errors</div>
+            <div class="kpi-value danger" data-k="recent_errors">—</div>
+          </a>
+        </div>
+      </section>
+
+      <section class="main-group">
+        <div class="main-group-head">
+          <h2>Extraction</h2>
+          <a class="link" href="/extraction">Open</a>
+        </div>
+        <div class="main-metrics" id="kpi-extraction">
+          <a class="main-metric" href="/extraction">
+            <div class="kpi-label">Ingest events</div>
+            <div class="kpi-value" data-k="events">—</div>
+          </a>
+          <a class="main-metric" href="/extraction">
+            <div class="kpi-label">CVEs extracted</div>
+            <div class="kpi-value ok" data-k="cves">—</div>
+          </a>
+          <a class="main-metric" href="/extraction">
+            <div class="kpi-label">AI fallback</div>
+            <div class="kpi-value" data-k="ai_fallback">—</div>
+          </a>
+          <a class="main-metric" href="/extraction">
+            <div class="kpi-label">Failed</div>
+            <div class="kpi-value danger" data-k="failed">—</div>
+          </a>
+        </div>
+      </section>
+
+      <section class="main-group">
+        <div class="main-group-head">
+          <h2>Enrichment</h2>
+          <a class="link" href="/enrichment">Open</a>
+        </div>
+        <div class="main-metrics" id="kpi-enrichment">
+          <a class="main-metric" href="/enrichment">
+            <div class="kpi-label">Waiting</div>
+            <div class="kpi-value" data-k="pending">—</div>
+          </a>
+          <a class="main-metric" href="/enrichment">
+            <div class="kpi-label">Enriched</div>
+            <div class="kpi-value ok" data-k="enriched">—</div>
+          </a>
+          <a class="main-metric" href="/enrichment">
+            <div class="kpi-label">AI fallback</div>
+            <div class="kpi-value" data-k="ai_fallback">—</div>
+          </a>
+          <a class="main-metric" href="/enrichment">
+            <div class="kpi-label">Incomplete</div>
+            <div class="kpi-value danger" data-k="incomplete">—</div>
+          </a>
+        </div>
+      </section>
+
+      <section class="main-group">
+        <div class="main-group-head">
+          <h2>Internal systems</h2>
+          <a class="link" href="/inventory">Open</a>
+        </div>
+        <div class="main-metrics" id="kpi-inventory">
+          <a class="main-metric" href="/inventory">
+            <div class="kpi-label">Products</div>
+            <div class="kpi-value" data-k="assets_total">—</div>
+          </a>
+          <a class="main-metric" href="/inventory">
+            <div class="kpi-label">Systems</div>
+            <div class="kpi-value" data-k="systems">—</div>
+          </a>
+          <a class="main-metric" href="/inventory">
+            <div class="kpi-label">Libraries</div>
+            <div class="kpi-value" data-k="libraries">—</div>
+          </a>
+          <a class="main-metric" href="/inventory">
+            <div class="kpi-label">Teams</div>
+            <div class="kpi-value" data-k="teams_count">—</div>
+          </a>
+        </div>
+      </section>
+
+      <section class="main-group">
+        <div class="main-group-head">
+          <h2>Matching</h2>
+          <a class="link" href="/matching">Open</a>
+        </div>
+        <div class="main-metrics" id="kpi-matching">
+          <a class="main-metric" href="/matching">
+            <div class="kpi-label">Waiting</div>
+            <div class="kpi-value" data-k="waiting">—</div>
+          </a>
+          <a class="main-metric" href="/matching">
+            <div class="kpi-label">Matched</div>
+            <div class="kpi-value ok" data-k="matched">—</div>
+          </a>
+          <a class="main-metric" href="/matching">
+            <div class="kpi-label">Unmatched</div>
+            <div class="kpi-value danger" data-k="unmatched">—</div>
+          </a>
+          <a class="main-metric" href="/matching">
+            <div class="kpi-label">AI ownership</div>
+            <div class="kpi-value" data-k="ai_fallback">—</div>
+          </a>
+        </div>
+      </section>
+
+      <section class="main-group">
+        <div class="main-group-head">
+          <h2>Actions</h2>
+          <a class="link" href="/actions">Open</a>
+        </div>
+        <div class="main-metrics" id="kpi-actions">
+          <a class="main-metric" href="/actions">
+            <div class="kpi-label">Ready</div>
+            <div class="kpi-value" data-k="ready">—</div>
+          </a>
+          <a class="main-metric" href="/actions">
+            <div class="kpi-label">Actioned</div>
+            <div class="kpi-value ok" data-k="actioned">—</div>
+          </a>
+          <a class="main-metric" href="/actions">
+            <div class="kpi-label">Tickets</div>
+            <div class="kpi-value" data-k="tickets">—</div>
+          </a>
+          <a class="main-metric" href="/actions">
+            <div class="kpi-label">Hunts / detections</div>
+            <div class="kpi-value" data-k="detections">—</div>
+          </a>
+        </div>
+      </section>
+    </div>
+  </div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/dashboard.js?v={{ version }}"></script>
+{% endblock %}

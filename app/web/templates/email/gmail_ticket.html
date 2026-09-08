@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ cve_id }} vulnerability ticket</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1f2933;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#ffffff;border:1px solid #e4e7eb;border-radius:8px;">
+          <tr>
+            <td style="padding:20px 28px;background:#111827;color:#ffffff;border-radius:8px 8px 0 0;">
+              <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.75;">EVulnTasker Act ticket</div>
+              <h1 style="margin:8px 0 0;font-size:22px;line-height:1.3;">{{ cve_id }}</h1>
+              <p style="margin:8px 0 0;font-size:14px;opacity:0.9;">{{ summary }}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:24px 28px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #e4e7eb;width:40%;color:#52606d;font-size:13px;">CVSS score</td>
+                  <td style="padding:8px 0;border-bottom:1px solid #e4e7eb;font-size:14px;font-weight:600;">{{ cvss_score }} <span style="font-weight:400;color:#52606d;">({{ severity }})</span></td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #e4e7eb;color:#52606d;font-size:13px;">EPSS probability</td>
+                  <td style="padding:8px 0;border-bottom:1px solid #e4e7eb;font-size:14px;font-weight:600;">{{ epss_probability }}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #e4e7eb;color:#52606d;font-size:13px;">Matched product</td>
+                  <td style="padding:8px 0;border-bottom:1px solid #e4e7eb;font-size:14px;">{{ vendor }} / {{ product }} ({{ affected_versions }})</td>
+                </tr>
+              </table>
+
+              {% if description %}
+              <h2 style="margin:24px 0 8px;font-size:16px;">Summary</h2>
+              <p style="margin:0;font-size:14px;line-height:1.55;white-space:pre-wrap;">{{ description }}</p>
+              {% endif %}
+
+              <h2 style="margin:24px 0 8px;font-size:16px;">Matched asset</h2>
+              {% if unmatched %}
+              <p style="margin:0;font-size:14px;color:#52606d;">No Internal systems row matched this CVE.</p>
+              {% else %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
+                <tr>
+                  <th align="left" style="padding:6px 0;border-bottom:1px solid #e4e7eb;color:#52606d;">Asset</th>
+                  <th align="left" style="padding:6px 0;border-bottom:1px solid #e4e7eb;color:#52606d;">Product</th>
+                  <th align="left" style="padding:6px 0;border-bottom:1px solid #e4e7eb;color:#52606d;">Owner</th>
+                </tr>
+                {% for asset in assets %}
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #f0f2f5;">{{ asset.name }}</td>
+                  <td style="padding:8px 0;border-bottom:1px solid #f0f2f5;">{{ asset.vendor }} {{ asset.product }} {{ asset.version }}</td>
+                  <td style="padding:8px 0;border-bottom:1px solid #f0f2f5;">{{ asset.owner or "Unassigned" }}{% if asset.email %} &lt;{{ asset.email }}&gt;{% endif %}</td>
+                </tr>
+                {% endfor %}
+              </table>
+              {% endif %}
+
+              <h2 style="margin:24px 0 8px;font-size:16px;">Suggested remediation</h2>
+              <p style="margin:0;font-size:14px;line-height:1.55;">{{ remediation }}</p>
+
+              {% if sigma_rule %}
+              <h2 style="margin:24px 0 8px;font-size:16px;">Sigma hunting rule</h2>
+              <pre style="margin:0;padding:12px;background:#f8fafc;border:1px solid #e4e7eb;border-radius:6px;font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;">{{ sigma_rule }}</pre>
+              {% endif %}
+
+              {% if kql %}
+              <h2 style="margin:24px 0 8px;font-size:16px;">Microsoft Sentinel / KQL</h2>
+              <pre style="margin:0;padding:12px;background:#f8fafc;border:1px solid #e4e7eb;border-radius:6px;font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;">{{ kql }}</pre>
+              {% endif %}
+
+              {% if xql %}
+              <h2 style="margin:24px 0 8px;font-size:16px;">Cortex XQL</h2>
+              <pre style="margin:0;padding:12px;background:#f8fafc;border:1px solid #e4e7eb;border-radius:6px;font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;">{{ xql }}</pre>
+              {% endif %}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

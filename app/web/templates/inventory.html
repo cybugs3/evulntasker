@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Internal systems{% endblock %}
+{% block heading %}Internal systems{% endblock %}
+{% block lede %}Manual catalog of in-org products. Add rows one by one or import a CSV. Automatic discovery from CMDB / Sonatype / ITNM comes later.{% endblock %}
+{% block actions %}
+  <a class="btn-ghost" href="/cves">Incoming CVEs</a>
+{% endblock %}
+{% block content %}
+<div class="inv-board">
+  <section class="main-hero" id="inv-kpis">
+    <div class="main-tile">
+      <div class="kpi-label">Products</div>
+      <div class="kpi-value" data-k="assets_total">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Systems</div>
+      <div class="kpi-value" data-k="systems">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Libraries</div>
+      <div class="kpi-value" data-k="libraries">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Teams</div>
+      <div class="kpi-value" data-k="teams_count">—</div>
+    </div>
+  </section>
+
+  <section class="panel" id="inv-form-panel">
+    <div class="panel-head">
+      <h2 id="inv-form-title">Add system</h2>
+      <p class="muted">Required: vendor and product. Matching later uses vendor, product, type, and version.</p>
+    </div>
+    <form id="inv-asset-form" class="inv-form">
+      <input type="hidden" id="inv-id" value="" />
+      <label>Vendor
+        <input class="input" id="inv-vendor" required placeholder="Apache" />
+      </label>
+      <label>Product
+        <input class="input" id="inv-product" required placeholder="HTTP Server" />
+      </label>
+      <label>Product type
+        <input class="input" id="inv-product-type" placeholder="web-server" />
+      </label>
+      <label>Version
+        <input class="input" id="inv-version" placeholder="2.4.58" />
+      </label>
+      <label>Owner
+        <input class="input" id="inv-owner" placeholder="Responsible person" />
+      </label>
+      <label>Email
+        <input class="input" id="inv-email" type="email" placeholder="owner@company.local" />
+      </label>
+      <label>Team
+        <input class="input" id="inv-team" placeholder="Platform" />
+      </label>
+      <div class="inv-form-actions">
+        <button class="btn" type="submit" id="inv-save-btn">Add system</button>
+        <button class="btn-ghost" type="button" id="inv-cancel-btn" hidden>Cancel</button>
+        <p class="muted" id="inv-form-status"></p>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel" id="inv-csv-panel">
+    <div class="panel-head">
+      <h2>Import CSV</h2>
+      <p class="muted">Headers: <code>vendor,product,product_type,version,owner_name,owner_email,team</code>. Re-upload merges by vendor / product / version.</p>
+    </div>
+    <form id="inv-csv-form" class="inv-csv-row">
+      <input class="input" type="file" id="inv-csv-file" accept=".csv,text/csv" />
+      <button class="btn" type="submit">Import CSV</button>
+      <a class="btn-ghost" href="/api/inventory/template.csv">Download template</a>
+      <p class="muted" id="inv-csv-status"></p>
+    </form>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Systems database</h2>
+      <p class="muted">Only rows you added or imported. Empty until you enter data.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>Vendor</th>
+            <th>Product</th>
+            <th>Product type</th>
+            <th>Version</th>
+            <th>Owner</th>
+            <th>Email</th>
+            <th>Team</th>
+            <th>Last update</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="inv-catalog">
+          <tr><td colspan="9" class="empty">Loading systems…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+<template id="tpl-inv-row">
+  <tr>
+    <td data-slot="vendor"></td>
+    <td data-slot="product"></td>
+    <td data-slot="product-type"></td>
+    <td class="mono" data-slot="version"></td>
+    <td data-slot="owner"></td>
+    <td data-slot="email"></td>
+    <td data-slot="team"></td>
+    <td class="muted" data-slot="updated"></td>
+    <td class="inv-row-actions">
+      <button class="btn-ghost btn-sm" type="button" data-edit>Edit</button>
+      <button class="btn-ghost btn-sm" type="button" data-del>Delete</button>
+    </td>
+  </tr>
+</template>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/inventory.js"></script>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}CVE Tracker{% endblock %}
+{% block heading %}CVE Tracker{% endblock %}
+{% block lede %}Every CVE seen by EVulnTasker. Click a row to expand the station graph between that CVE and the next.{% endblock %}
+{% block content %}
+  <section class="panel">
+    <div class="panel-head">
+      <h2>CVE inventory</h2>
+      <div class="filters">
+        <input id="tracker-filter" class="input" placeholder="Filter by CVE, vendor, product…" />
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>CVE Number</th>
+            <th>Vuln type</th>
+            <th>Vendor</th>
+            <th>Product</th>
+            <th>Version</th>
+          </tr>
+        </thead>
+        <tbody id="tracker-tbody">
+          <tr><td colspan="5" class="empty">Loading CVEs…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <template id="tpl-tracker-row">
+    <tr class="clickable">
+      <td class="mono" data-slot="cve"></td>
+      <td data-slot="type"></td>
+      <td data-slot="vendor"></td>
+      <td data-slot="product"></td>
+      <td class="mono" data-slot="version"></td>
+    </tr>
+  </template>
+  <template id="tpl-tracker-journey">
+    <tr class="journey-row">
+      <td colspan="5">
+        <div class="journey-inline">
+          <p class="muted journey-loading">Loading stations…</p>
+          <ol class="stations-h"></ol>
+        </div>
+      </td>
+    </tr>
+  </template>
+  <template id="tpl-tracker-station">
+    <li class="station-h">
+      <div class="station-index" data-slot="index"></div>
+      <div class="station-title" data-slot="title"></div>
+      <div class="muted" data-slot="detail"></div>
+    </li>
+  </template>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/tracker.js"></script>
+{% endblock %}

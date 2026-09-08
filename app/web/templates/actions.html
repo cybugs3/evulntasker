@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Actions{% endblock %}
+{% block heading %}Actions{% endblock %}
+{% block lede %}Open owner and threat-hunting tickets, generate Sigma/SIEM detections, and notify owners. Configure Jira, Monday.com, email (SMTP mail relay), or an internal CRM in Settings.{% endblock %}
+{% block actions %}
+  <a class="btn-ghost" href="/settings">Configure ticketing</a>
+{% endblock %}
+{% block content %}
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Ticketing and detections</h2>
+      <p class="muted" id="ticketing-hint">Owner ticket, hunt ticket, and generated Sigma/KQL/XQL. Action status follows the ticketing system selected in Settings.</p>
+    </div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>CVE</th>
+            <th>Owner ticket</th>
+            <th>Hunt ticket</th>
+            <th>Detections</th>
+            <th>Action status</th>
+          </tr>
+        </thead>
+        <tbody id="stage-tbody">
+          <tr><td colspan="5" class="empty">Loading actions queue…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <template id="tpl-action-row">
+    <tr class="clickable">
+      <td class="mono"><a class="link" data-slot="cve-link"></a></td>
+      <td data-slot="owner-ticket"></td>
+      <td data-slot="hunt-ticket"></td>
+      <td data-slot="detections"></td>
+      <td data-slot="action-status"></td>
+    </tr>
+  </template>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/stage.js?v={{ version }}-mail" data-stage="actions"></script>
+{% endblock %}
