@@ -33,6 +33,41 @@ def test_parse_csv_skips_empty_rows():
     assert rows[0]["product"] == "httpd"
 
 
+def test_export_catalog_csv_includes_rows_and_round_trips():
+    import app.models  # noqa: F401
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.session import Base
+    from app.models.asset import Asset
+    from app.services.inventory_sync import export_catalog_csv, parse_csv_text
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, expire_on_commit=False)()
+    db.add(
+        Asset(
+            name="ePO",
+            vendor="Trellix",
+            product="ePolicy Orchestrator",
+            system_type="endpoint",
+            version="5.10.0",
+            owner_name="Guy",
+            owner_email="guy.zwerdling@gmail.com",
+            team="Platform",
+        )
+    )
+    db.commit()
+    text = export_catalog_csv(db)
+    assert text.splitlines()[0] == "vendor,product,product_type,version,owner_name,owner_email,team,last_update"
+    rows = parse_csv_text(text)
+    assert len(rows) == 1
+    assert rows[0]["vendor"] == "Trellix"
+    assert rows[0]["product"] == "ePolicy Orchestrator"
+    assert rows[0]["version"] == "5.10.0"
+    assert rows[0]["owner_email"] == "guy.zwerdling@gmail.com"
+
+
 def test_csv_template_is_headers_only():
     text = sample_csv_text()
     rows = parse_csv_text(text)
@@ -65,4 +100,102 @@ def test_version_overlap_empty_does_not_block():
 def test_version_mismatch_excluded():
     vuln = SimpleNamespace(affected_versions="1.0.0", version=None)
     keep, _bump = version_overlap("2.4.58", vuln)
+    assert keep is False
+
+
+def test_remote_inventory_inserts_new_equipment_only():
+    import app.models  # noqa: F401
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.session import Base
+    from app.models.asset import Asset
+    from app.services.inventory_sync import upsert_rows
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, expire_on_commit=False)()
+    first = upsert_rows(
+        db,
+        "cmdb",
+        [{"vendor": "Trellix", "product": "ePO", "version": "5.10", "owner_email": "old@corp.local"}],
+    )
+    assert first["created"] == 1
+    assert first["updated"] == 0
+    second = upsert_rows(
+        db,
+        "cmdb",
+        [
+            {"vendor": "Trellix", "product": "ePO", "version": "5.10", "owner_email": "new@corp.local"},
+            {"vendor": "Red Hat", "product": "RHEL", "version": "9", "owner_email": "linux@corp.local"},
+        ],
+    )
+    assert second["created"] == 1
+    assert second["updated"] == 0
+    epo = db.query(Asset).filter_by(product="ePO").one()
+    assert epo.owner_email == "old@corp.local"
+    assert db.query(Asset).count() == 2
+
+
+def test_delete_assets_removes_only_selected():
+    import app.models  # noqa: F401
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.session import Base
+    from app.models.asset import Asset, AssetMatch
+    from app.models.enums import PipelineStatus
+    from app.models.vulnerability import Vulnerability
+    from app.services.inventory_sync import delete_assets
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, expire_on_commit=False)()
+    keep = Asset(name="keep", vendor="Red Hat", product="RHEL")
+    drop = Asset(name="drop", vendor="Trellix", product="ePO")
+    vuln = Vulnerability(cve_id="CVE-2026-33333", title="test", status=PipelineStatus.MATCHED)
+    db.add_all([keep, drop, vuln])
+    db.flush()
+    db.add(AssetMatch(vulnerability_id=vuln.id, asset_id=drop.id, method="local"))
+    db.commit()
+
+    deleted = delete_assets(db, [drop.id, drop.id])
+    assert deleted == 1
+    assert db.get(Asset, drop.id) is None
+    assert db.get(Asset, keep.id) is not None
+    assert db.get(Vulnerability, vuln.id) is not None
+    assert db.query(AssetMatch).count() == 0
+
+
+def test_version_overlap_nvd_prose_does_not_block():
+    vuln = SimpleNamespace(
+        affected_versions="All versions below ePO 5.10 Service Pack 1 Update 2",
+        version=None,
+    )
+    keep, bump = version_overlap("5.10.0", vuln)
+    assert keep is True
+    assert bump > 0
+
+
+def test_version_overlap_advisory_family_covers_vendor_build():
+    vuln = SimpleNamespace(
+        affected_versions="9.0",
+        version=None,
+        title="Ivanti Connect Secure 9.x, 22.x",
+        description="ICS 9.x, 22.x are affected.",
+    )
+    keep, bump = version_overlap("22.7R2.4", vuln)
+    assert keep is True
+    assert bump > 0
+
+
+def test_version_overlap_numeric_minor_does_not_cover_other_major():
+    vuln = SimpleNamespace(affected_versions="9.0", version=None, title="", description="")
+    keep, _bump = version_overlap("22.7R2.4", vuln)
+    assert keep is False
+
+
+def test_version_overlap_same_major_different_minor_without_family():
+    vuln = SimpleNamespace(affected_versions="9.0", version=None, title="", description="")
+    keep, _bump = version_overlap("9.1R18", vuln)
     assert keep is False

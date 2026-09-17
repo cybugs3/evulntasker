@@ -175,7 +175,7 @@ async def finalize_extract(
         log_ai_fallback(
             db,
             vuln,
-            "AI fallback used during extraction",
+            "AI used during extraction",
             {"reasoning": extracted.ai_raw, "cve_ids": extracted.cve_ids},
         )
         vuln.ai_extraction_used = True

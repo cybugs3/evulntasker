@@ -16,7 +16,7 @@ class VulnerabilityRepository(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    feed_type: Mapped[str] = mapped_column(String(32), nullable=False)  # nvd | epss | atom | exploitdb
+    feed_type: Mapped[str] = mapped_column(String(32), nullable=False)  # nvd | epss | atom | local | smb | outlook | inline
     endpoint: Mapped[str] = mapped_column(String(512), default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     sync_status: Mapped[str] = mapped_column(String(32), default="idle")  # idle|syncing|ok|error

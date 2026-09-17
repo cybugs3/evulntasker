@@ -14,12 +14,14 @@ from app.api.settings.common import (
     get_or_create_source,
     public_source,
     record_source_error,
+    save_env,
     save_source_cfg,
 )
 from app.db.session import get_db
 from app.models.source import InputSource
 from app.services import file_ingest
-from app.services.ingestion import ingest_payload
+from app.services.ingestion import ingest_payload, skip_unchanged_ingest_file
+from app.utils.cve import extract_cves
 
 router = APIRouter()
 
@@ -81,6 +83,7 @@ class WebApiIn(BaseModel):
     url: str = ""
     token: str = ""
     poll_seconds: int = Field(default=3600, ge=60, le=86400)
+    intel_start_date: str | None = None
 
 
 @router.put("/settings/smb")
@@ -104,7 +107,6 @@ def save_smb(body: SmbIn, db: Session = Depends(get_db)) -> dict[str, Any]:
             }
         ]
     locations = normalize_locations({"locations": incoming})
-    source.enabled = bool(body.enabled)
     cfg["locations"] = locations
     first = locations[0] if locations else {}
     cfg["server"] = first.get("server") or ""
@@ -119,6 +121,9 @@ def save_smb(body: SmbIn, db: Session = Depends(get_db)) -> dict[str, Any]:
     source.last_error = None
     db.commit()
     db.refresh(source)
+    from app.services.repo_catalog import sync_source_repositories
+
+    sync_source_repositories(db)
     return {"smb": public_source(source)}
 
 
@@ -129,6 +134,9 @@ def save_local(body: LocalIn, db: Session = Depends(get_db)) -> dict[str, Any]:
     save_source_cfg(source, body, ["path", "poll_seconds"])
     db.commit()
     db.refresh(source)
+    from app.services.repo_catalog import sync_source_repositories
+
+    sync_source_repositories(db)
     return {"local": public_source(source)}
 
 
@@ -139,6 +147,9 @@ def save_outlook(body: OutlookIn, db: Session = Depends(get_db)) -> dict[str, An
     save_source_cfg(source, body, ["server", "domain", "username", "password", "email", "folder", "poll_seconds"])
     db.commit()
     db.refresh(source)
+    from app.services.repo_catalog import sync_source_repositories
+
+    sync_source_repositories(db)
     return {"outlook": public_source(source)}
 
 
@@ -161,7 +172,6 @@ def save_web_api(body: WebApiIn, db: Session = Depends(get_db)) -> dict[str, Any
         incoming = [{"url": body.url.strip(), "name": "", "token": body.token.strip()}]
     feeds = merge_preserved_tokens(normalize_feeds({"feeds": incoming}), cfg)
     apply_display_name(db, source, body.name, "web_api")
-    source.enabled = bool(body.enabled)
     cfg["feeds"] = feeds
     cfg["url"] = feeds[0]["url"] if feeds else ""
     cfg["poll_seconds"] = body.poll_seconds
@@ -169,12 +179,16 @@ def save_web_api(body: WebApiIn, db: Session = Depends(get_db)) -> dict[str, Any
         cfg["token"] = body.token.strip()
     source.config = cfg
     source.last_error = None
-    from app.services.repo_catalog import apply_lookup_feed_edits, sync_atom_repositories
+    from app.services.repo_catalog import apply_lookup_feed_edits, sync_atom_channel_enabled, sync_atom_repositories
 
     sync_atom_repositories(db, source=source, commit=False)
     apply_lookup_feed_edits(db, feeds)
+    sync_atom_channel_enabled(db)
     db.commit()
     db.refresh(source)
+    if body.intel_start_date is not None:
+        start = body.intel_start_date.strip()[:10]
+        save_env({"INTEL_START_DATE": start or "2024-01-01"})
     return {"web_api": public_source(source)}
 
 
@@ -310,6 +324,11 @@ def test_web_api(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {"ok": not errors, "feeds": results}
 
 
+def _stamp_if_done(seen: dict[str, str], key: str, stamp: str, text: str, created: bool) -> None:
+    if created or not extract_cves(text):
+        seen[key] = stamp
+
+
 def pull_smb_files(db: Session, source: InputSource) -> int:
     from app.integrations.smb import list_text_files, location_config, normalize_locations, read_text_file
 
@@ -331,12 +350,28 @@ def pull_smb_files(db: Session, source: InputSource) -> int:
         for info in files:
             stamp_key = info["path"]
             stamp = f"{info['size']}:{info['mtime']}"
-            if seen.get(stamp_key) == stamp:
+            filename = info["name"]
+            if skip_unchanged_ingest_file(db, source.id, filename, seen.get(stamp_key), stamp):
                 continue
             text = read_text_file(info["path"], loc_cfg)
-            if file_ingest.ingest_text(db, source, text, filename=info["name"]):
+            created = bool(
+                file_ingest.ingest_text(
+                    db,
+                    source,
+                    text,
+                    filename=filename,
+                    extra={
+                        "location": label,
+                        "smb_server": loc.get("server") or "",
+                        "smb_share": loc.get("share") or "",
+                        "smb_path": loc.get("path") or "",
+                        "file_path": info.get("path") or "",
+                    },
+                )
+            )
+            if created:
                 ingested += 1
-            seen[stamp_key] = stamp
+            _stamp_if_done(seen, stamp_key, stamp, text, created)
     cfg["locations"] = locations
     cfg["seen"] = seen
     source.config = cfg
@@ -358,14 +393,15 @@ def pull_local_files(db: Session, source: InputSource) -> int:
         if not path.is_file() or not file_ingest.is_readable(path):
             continue
         stamp = f"{path.stat().st_size}:{int(path.stat().st_mtime)}"
-        if seen.get(path.name) == stamp:
+        if skip_unchanged_ingest_file(db, source.id, path.name, seen.get(path.name), stamp):
             continue
         text = file_ingest.read_as_text(path)
         if text is None:
             continue
-        if file_ingest.ingest_text(db, source, text, filename=path.name):
+        created = bool(file_ingest.ingest_text(db, source, text, filename=path.name))
+        if created:
             ingested += 1
-        seen[path.name] = stamp
+        _stamp_if_done(seen, path.name, stamp, text, created)
     cfg["seen"] = seen
     source.config = cfg
     source.last_error = None
@@ -390,7 +426,13 @@ def pull_outlook(db: Session, source: InputSource) -> int:
     return count
 
 
-def pull_web_api(db: Session, source: InputSource, only_url: str | None = None) -> int:
+def pull_web_api(
+    db: Session,
+    source: InputSource,
+    only_url: str | None = None,
+    *,
+    include_disabled: bool | None = None,
+) -> int:
     from app.services.atom_feed import (
         entry_cves,
         entry_text,
@@ -406,13 +448,17 @@ def pull_web_api(db: Session, source: InputSource, only_url: str | None = None) 
         feeds = [feed for feed in feeds if feed["url"] == only_url]
         if not feeds:
             raise ValueError("That ATOM feed is no longer in Settings → Feeds.")
+        if include_disabled is None:
+            include_disabled = True
     elif not feeds:
         raise ValueError("Add at least one ATOM feed URL")
     ingested = 0
     errors: list[str] = []
     for feed in feeds:
         url = feed["url"]
-        if is_lookup_feed(feed, url) or not atom_feed_enabled(db, url):
+        if is_lookup_feed(feed, url):
+            continue
+        if not include_disabled and not atom_feed_enabled(db, url):
             continue
         feed_ingested = 0
         try:
@@ -437,6 +483,7 @@ def pull_web_api(db: Session, source: InputSource, only_url: str | None = None) 
                 "link": entry.get("link") or "",
                 "feed_url": url,
                 "feed_name": feed.get("name") or parsed.get("title") or "",
+                "feed_type": feed.get("feed_type") or "",
                 "entry_id": entry.get("id") or "",
             }
             if ingest_payload(db, source, payload=payload, raw_text=raw):
@@ -459,8 +506,6 @@ def sync_kind(kind: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     if kind not in SOURCES:
         raise HTTPException(404, "Unknown source kind")
     source = get_or_create_source(db, kind)
-    if not source.enabled:
-        raise HTTPException(409, "Source is disabled")
     try:
         if kind == "smb":
             count = pull_smb_files(db, source)

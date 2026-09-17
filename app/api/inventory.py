@@ -8,14 +8,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.api.settings.common import save_env
 from app.config import get_settings
 from app.db.session import get_db
-from app.models.asset import Asset, AssetMatch
-from app.models.vulnerability import Vulnerability
+from app.models.asset import Asset
 from app.services.inventory_sources import (
     classify_asset_origin,
     is_library,
@@ -24,22 +22,25 @@ from app.services.inventory_sources import (
 from app.services.inventory_sync import (
     catalog_rows,
     delete_asset,
+    delete_assets,
     import_csv_text,
     inventory_status,
     sample_csv_text,
+    export_catalog_csv,
     save_manual_asset,
     sync_all,
 )
 
 router = APIRouter()
 
-RELEVANT_METHODS = frozenset({"cmdb", "sonatype", "local", "csv", "itnm"})
-RELEVANT_MIN_CONFIDENCE = 0.8
-
 
 class InventoryScheduleIn(BaseModel):
     enabled: bool = False
-    sync_seconds: int = Field(default=1800, ge=60, le=604800)
+    sync_seconds: int = Field(default=86400, ge=60, le=604800)
+
+
+class AssetDeleteIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=5000)
 
 
 class AssetWrite(BaseModel):
@@ -53,48 +54,25 @@ class AssetWrite(BaseModel):
     name: str = Field(default="", max_length=256)
 
 
-def _inventory_match_kpis(db: Session) -> dict[str, Any]:
-    cross_matches = db.query(func.count(AssetMatch.id)).scalar() or 0
-    relevant_filter = (
-        AssetMatch.method.in_(RELEVANT_METHODS),
-        AssetMatch.confidence >= RELEVANT_MIN_CONFIDENCE,
-    )
-    relevant_hits = db.query(func.count(AssetMatch.id)).filter(*relevant_filter).scalar() or 0
-    relevant = (
-        db.query(func.count(func.distinct(AssetMatch.vulnerability_id))).filter(*relevant_filter).scalar()
-        or 0
-    )
-    ai_only = db.query(func.count(AssetMatch.id)).filter(AssetMatch.method == "ai").scalar() or 0
-    enriched_like = (
-        db.query(func.count(Vulnerability.id))
-        .filter(
-            Vulnerability.pipeline_status.in_(
-                [
-                    "enriched",
-                    "matched",
-                    "actioned",
-                    "completed",
-                    "ai_fallback",
-                    "ENRICHED",
-                    "MATCHED",
-                    "ACTIONED",
-                    "AI_FALLBACK",
-                ]
-            )
-        )
-        .scalar()
-        or 0
-    )
-    if enriched_like == 0:
-        enriched_like = db.query(func.count(Vulnerability.id)).scalar() or 0
-    relevance_rate = round(100.0 * relevant / enriched_like, 1) if enriched_like else 0.0
+def _catalog_kpis(db: Session) -> dict[str, Any]:
+    asset_cols = db.query(Asset.system_type, Asset.team).filter(Asset.active.is_(True)).all()
+    systems = 0
+    libraries = 0
+    teams: Counter[str] = Counter()
+    for system_type, team in asset_cols:
+        st = (system_type or "unknown").strip().lower() or "unknown"
+        if is_library(st):
+            libraries += 1
+        else:
+            systems += 1
+        if team:
+            teams[team] += 1
     return {
-        "cross_matches": int(cross_matches),
-        "relevant": int(relevant),
-        "relevant_hits": int(relevant_hits),
-        "ai_inferred": int(ai_only),
-        "relevance_rate": relevance_rate,
-        "enriched_like": int(enriched_like),
+        "systems": systems,
+        "libraries": libraries,
+        "assets_total": len(asset_cols),
+        "teams_count": len(teams),
+        "teams": teams,
     }
 
 
@@ -102,36 +80,24 @@ def _inventory_match_kpis(db: Session) -> dict[str, Any]:
 def org_inventory(db: Session = Depends(get_db), include_details: bool = True) -> dict[str, Any]:
     cfg = get_settings()
     specs = list_source_specs(cfg)
-
+    counts = _catalog_kpis(db)
+    enabled_sources = sum(1 for spec in specs if spec["enabled"])
+    kpis = {
+        "sources": len(specs),
+        "sources_online": enabled_sources,
+        "systems": counts["systems"],
+        "libraries": counts["libraries"],
+        "assets_total": counts["assets_total"],
+        "teams_count": counts["teams_count"],
+        "cross_matches": 0,
+        "relevant": 0,
+        "relevant_hits": 0,
+        "ai_inferred": 0,
+        "relevance_rate": 0.0,
+    }
     if not include_details:
-        asset_cols = db.query(Asset.system_type, Asset.team).filter(Asset.active.is_(True)).all()
-        systems = 0
-        libraries = 0
-        teams: Counter[str] = Counter()
-        for system_type, team in asset_cols:
-            st = (system_type or "unknown").strip().lower() or "unknown"
-            if is_library(st):
-                libraries += 1
-            else:
-                systems += 1
-            if team:
-                teams[team] += 1
-        match_kpis = _inventory_match_kpis(db)
-        enabled_sources = sum(1 for spec in specs if spec["enabled"])
         return {
-            "kpis": {
-                "sources": len(specs),
-                "sources_online": enabled_sources,
-                "systems": systems,
-                "libraries": libraries,
-                "assets_total": len(asset_cols),
-                "teams_count": len(teams),
-                "cross_matches": match_kpis["cross_matches"],
-                "relevant": match_kpis["relevant"],
-                "relevant_hits": match_kpis["relevant_hits"],
-                "ai_inferred": match_kpis["ai_inferred"],
-                "relevance_rate": match_kpis["relevance_rate"],
-            },
+            "kpis": kpis,
             "setup": {},
             "catalog": [],
             "sources": [],
@@ -144,143 +110,50 @@ def org_inventory(db: Session = Depends(get_db), include_details: bool = True) -
 
     assets = db.query(Asset).filter(Asset.active.is_(True)).all()
     setup = inventory_status(db)
-
     by_origin: Counter[str] = Counter()
-    systems = 0
-    libraries = 0
-    teams: Counter[str] = Counter()
     system_types: Counter[str] = Counter()
-
     for asset in assets:
-        origin = classify_asset_origin(asset)
-        by_origin[origin] += 1
+        by_origin[classify_asset_origin(asset)] += 1
         st = (asset.system_type or "unknown").strip().lower() or "unknown"
         system_types[st] += 1
-        if is_library(st):
-            libraries += 1
-        else:
-            systems += 1
-        if asset.team:
-            teams[asset.team] += 1
-
-    matches = (
-        db.query(AssetMatch)
-        .options(joinedload(AssetMatch.vulnerability), joinedload(AssetMatch.asset))
-        .all()
-    )
-    cross_matches = len(matches)
-    relevant_matches = [
-        m
-        for m in matches
-        if (m.method or "") in RELEVANT_METHODS and float(m.confidence or 0) >= RELEVANT_MIN_CONFIDENCE
-    ]
-    relevant_vuln_ids = {m.vulnerability_id for m in relevant_matches}
-    ai_only = sum(1 for m in matches if (m.method or "") == "ai")
-
-    method_counts: Counter[str] = Counter((m.method or "unknown") for m in matches)
-
-    enriched_like = (
-        db.query(func.count(Vulnerability.id))
-        .filter(
-            Vulnerability.pipeline_status.in_(
-                [
-                    "enriched",
-                    "matched",
-                    "actioned",
-                    "completed",
-                    "ai_fallback",
-                    "ENRICHED",
-                    "MATCHED",
-                    "ACTIONED",
-                    "AI_FALLBACK",
-                ]
-            )
-        )
-        .scalar()
-        or 0
-    )
-    if enriched_like == 0:
-        enriched_like = db.query(func.count(Vulnerability.id)).scalar() or 0
-
-    relevance_rate = (
-        round(100.0 * len(relevant_vuln_ids) / enriched_like, 1) if enriched_like else 0.0
-    )
 
     sources_out = []
     for spec in specs:
         origin = spec["asset_origin"]
-        method = spec["match_method"]
         asset_count = by_origin.get(origin, 0)
-        match_count = method_counts.get(method, 0)
         src_state = (setup.get("sources") or {}).get(origin) or {}
         sources_out.append(
             {
                 **spec,
                 "assets": asset_count,
-                "matches": match_count,
+                "matches": 0,
                 "status": "online" if spec["enabled"] else "offline",
-                "health": _source_health(spec["enabled"], asset_count, match_count),
+                "health": _source_health(spec["enabled"], asset_count, 0),
                 "last_sync_at": src_state.get("last_sync_at"),
                 "last_error": src_state.get("last_error"),
                 "configured": src_state.get("configured"),
             }
         )
 
-    top_teams = [{"team": name, "assets": count} for name, count in teams.most_common(8)]
+    top_teams = [{"team": name, "assets": count} for name, count in counts["teams"].most_common(8)]
     type_breakdown = [
         {"type": name, "count": count, "kind": "library" if is_library(name) else "system"}
         for name, count in system_types.most_common(12)
     ]
-
-    recent_relevant = []
-    for match in sorted(relevant_matches, key=lambda m: m.created_at or m.id, reverse=True)[:25]:
-        vuln = match.vulnerability
-        asset = match.asset
-        if vuln is None or asset is None:
-            continue
-        recent_relevant.append(
-            {
-                "cve_id": vuln.cve_id,
-                "vendor": vuln.vendor,
-                "product": vuln.product,
-                "asset": asset.name,
-                "system_type": asset.system_type,
-                "team": asset.team,
-                "owner": asset.owner_name,
-                "method": match.method,
-                "confidence": round(float(match.confidence or 0), 2),
-                "href": f"/vulnerabilities/{vuln.cve_id}",
-                "matching_href": "/matching",
-            }
-        )
-
-    enabled_sources = sum(1 for s in sources_out if s["enabled"])
     return {
-        "kpis": {
-            "sources": len(sources_out),
-            "sources_online": enabled_sources,
-            "systems": systems,
-            "libraries": libraries,
-            "assets_total": len(assets),
-            "teams_count": len(teams),
-            "cross_matches": cross_matches,
-            "relevant": len(relevant_vuln_ids),
-            "relevant_hits": len(relevant_matches),
-            "ai_inferred": ai_only,
-            "relevance_rate": relevance_rate,
-        },
+        "kpis": kpis,
         "setup": setup,
-        "catalog": catalog_rows(db),
+        "catalog": catalog_rows(db, limit=100_000),
         "sources": sources_out,
         "coverage": {
-            "cves_considered": enriched_like,
-            "cves_relevant": len(relevant_vuln_ids),
-            "relevance_rate": relevance_rate,
-            "by_method": dict(method_counts),
+            "cves_considered": 0,
+            "cves_relevant": 0,
+            "relevance_rate": 0.0,
+            "by_method": {},
         },
         "teams": top_teams,
         "types": type_breakdown,
-        "relevant_rows": recent_relevant,
+        "relevant_rows": [],
         "links": {
             "matching": "/matching",
             "settings_assets": "/settings#assets",
@@ -295,6 +168,15 @@ def download_sample_csv() -> PlainTextResponse:
         sample_csv_text(),
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="internal-systems.csv"'},
+    )
+
+
+@router.get("/inventory/export.csv")
+def export_inventory_csv(db: Session = Depends(get_db)) -> PlainTextResponse:
+    return PlainTextResponse(
+        export_catalog_csv(db),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="systems-database.csv"'},
     )
 
 
@@ -317,6 +199,12 @@ def update_inventory_asset(asset_id: int, body: AssetWrite, db: Session = Depend
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "id": asset_id, "setup": inventory_status(db)}
+
+
+@router.post("/inventory/assets/delete")
+def remove_inventory_assets(body: AssetDeleteIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    deleted = delete_assets(db, body.ids)
+    return {"ok": True, "deleted": deleted, "setup": inventory_status(db)}
 
 
 @router.delete("/inventory/assets/{asset_id}")

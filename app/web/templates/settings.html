@@ -1,15 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Settings{% endblock %}
 {% block heading %}Settings{% endblock %}
-{% block lede %}System integrations: database, system reset, input feeds, enrichment, internet intel, AI modules, asset APIs, ticketing, and notification message layout.{% endblock %}
+{% block lede %}System integrations: database, reset, input feeds, enrichment, AI modules, asset APIs, ticketing, and notification message layout.{% endblock %}
 {% block content %}
   <div class="settings-shell">
     <div class="settings-tabs" role="tablist" aria-label="Settings sections">
       <button class="settings-tab is-active" type="button" data-tab="database">Database</button>
-      <button class="settings-tab" type="button" data-tab="system">System</button>
+      <button class="settings-tab" type="button" data-tab="reset">Reset</button>
       <button class="settings-tab" type="button" data-tab="feeds">Feeds</button>
       <button class="settings-tab" type="button" data-tab="enrichment">Enrichment</button>
-      <button class="settings-tab" type="button" data-tab="intel">Internet intel</button>
       <button class="settings-tab" type="button" data-tab="ai">AI modules</button>
       <button class="settings-tab" type="button" data-tab="assets">Inventory</button>
       <button class="settings-tab" type="button" data-tab="ticketing">Ticketing</button>
@@ -72,28 +71,52 @@
       </form>
     </section>
 
-    <section class="panel settings-panel tab-panel" data-panel="system">
+    <section class="panel settings-panel tab-panel" data-panel="reset">
       <div class="panel-head">
-        <h2>System</h2>
-        <p class="muted">Dangerous maintenance. This does not change the database connection, input sources, or integration settings.</p>
+        <div class="panel-head-copy">
+          <h2>Reset</h2>
+          <p class="muted">Dangerous maintenance. This does not change the database connection, input sources, or integration settings.</p>
+        </div>
       </div>
-      <div class="wipe-box">
-        <h3>Reset system data</h3>
-        <p class="muted">Permanently deletes every row in the two working tables:</p>
-        <ul class="wipe-list">
-          <li><strong>Internal systems</strong> — organization products you added or imported</li>
-          <li><strong>Incoming CVEs</strong> — vulnerabilities ingested or entered, plus pipeline history, tickets, and detections</li>
-        </ul>
-        <button class="btn-danger" type="button" id="reset-system-btn">Reset system</button>
-        <p class="muted" id="wipe-status"></p>
+      <div class="wipe-grid">
+        <div class="wipe-box">
+          <h3>Reset Internal systems</h3>
+          <p class="muted">Permanently deletes every row in the Internal systems catalog:</p>
+          <ul class="wipe-list">
+            <li><strong>Internal systems</strong> — organization products you added, imported, or learned from CMDB / Sonatype / ITNM</li>
+            <li><strong>Asset matches</strong> — CVE-to-system links built from that catalog</li>
+          </ul>
+          <button class="btn-danger" type="button" id="reset-systems-btn">Reset Internal systems</button>
+          <p class="muted wipe-status" id="wipe-systems-status"></p>
+        </div>
+        <div class="wipe-box">
+          <h3>Delete Incoming CVEs</h3>
+          <p class="muted">Permanently deletes every CVE stored by EVulnTasker:</p>
+          <ul class="wipe-list">
+            <li><strong>Incoming CVEs</strong> — vulnerabilities ingested or entered</li>
+            <li><strong>Pipeline history</strong> — ingest events, tickets, and detections</li>
+          </ul>
+          <button class="btn-danger" type="button" id="reset-cves-btn">Delete all CVEs</button>
+          <p class="muted wipe-status" id="wipe-cves-status"></p>
+        </div>
       </div>
     </section>
 
     <section class="panel settings-panel tab-panel" data-panel="feeds">
       <div class="panel-head">
         <h2>Input feeds</h2>
-        <p class="muted">Configure how EVulnTasker receives vulnerability intelligence. The source name you set here is what appears on Manage Input Sources.</p>
+        <p class="muted">Connection details and poll interval live here. Enable, pause, and Sync now are on <a href="/sources">Input Sources</a>. Sync now pulls once even if the feed is paused; Enable only turns on automatic polling.</p>
       </div>
+      <form id="intel-start-form" class="feeds-window">
+        <div class="feeds-window-row">
+          <label>Ignore CVEs published before
+            <input class="input" id="intel-start" type="date" value="2024-01-01" />
+          </label>
+          <button class="btn" type="submit">Save date</button>
+        </div>
+        <p class="muted">Applies to every incoming path — Local, SMB, Exchange, ATOM, inline CVE, and Debugger. CVEs older than this date are ignored. NVD/EPSS lookups still run by CVE ID only for records already stored.</p>
+        <p class="muted" id="intel-start-status"></p>
+      </form>
       <div class="settings-subtabs" role="tablist" aria-label="Feed types">
         <button class="settings-subtab is-active" type="button" data-subtab="local" data-group="feeds">Local</button>
         <button class="settings-subtab" type="button" data-subtab="smb" data-group="feeds">SMB</button>
@@ -104,10 +127,7 @@
       <div class="subtab-panel is-active" data-subpanel="local" data-group="feeds">
         <div class="subtab-head"><h3>Local folder</h3></div>
         <form id="local-form" class="settings-form settings-fields">
-          <div class="settings-enable-bar">
-            <label class="switch settings-enable-switch"><input type="checkbox" id="local-enabled" /><span>Enable polling</span></label>
-          </div>
-          <p class="settings-desc muted">Drop any text into this folder — .txt, HTML, CSV, JSON, logs. EVulnTasker extracts CVE IDs with regex (for example CVE-2024-3094).</p>
+          <p class="settings-desc muted">Drop any text into this folder — .txt, HTML, CSV, JSON, logs. EVulnTasker extracts CVE IDs with regex (for example CVE-2024-3094). Enable auto-poll on Input Sources. Sync now pulls once without turning polling on.</p>
           <label>Source name
             <input class="input" id="local-name" placeholder="Local folder" />
           </label>
@@ -128,10 +148,7 @@
       <div class="subtab-panel" data-subpanel="smb" data-group="feeds">
         <div class="subtab-head"><h3>SMB / CIFS share</h3></div>
         <form id="smb-form" class="settings-form settings-fields">
-          <div class="settings-enable-bar">
-            <label class="switch settings-enable-switch"><input type="checkbox" id="smb-enabled" /><span>Enable polling</span></label>
-          </div>
-          <p class="settings-desc muted">Text files (.txt, .csv, .json, .md). CVE via regex; vendor/product/version from labels, CSV/JSON, or CPE. Use the same AD account for every location.</p>
+          <p class="settings-desc muted">Text files (.txt, .csv, .json, .md). CVE via regex; vendor/product/version from labels, CSV/JSON, or CPE. Use the same AD account for every location. Enable auto-poll on Input Sources. Sync now pulls once without turning polling on.</p>
           <label>Source name
             <input class="input" id="smb-name" placeholder="SMB share" />
           </label>
@@ -158,10 +175,7 @@
       <div class="subtab-panel" data-subpanel="exchange" data-group="feeds">
         <div class="subtab-head"><h3>Outlook / Exchange (on-prem)</h3></div>
         <form id="outlook-form" class="settings-form settings-fields">
-          <div class="settings-enable-bar">
-            <label class="switch settings-enable-switch"><input type="checkbox" id="outlook-enabled" /><span>Enable mailbox listener</span></label>
-          </div>
-          <p class="settings-desc muted">Each unread mail is scanned for CVE IDs and optional vendor/product/version in the body.</p>
+          <p class="settings-desc muted">Each unread mail is scanned for CVE IDs and optional vendor/product/version in the body. Enable the mailbox listener on Input Sources. Poll now pulls once without turning polling on.</p>
           <label>Source name
             <input class="input" id="outlook-name" placeholder="Outlook / Exchange" />
           </label>
@@ -187,10 +201,7 @@
       <div class="subtab-panel" data-subpanel="web" data-group="feeds">
         <div class="subtab-head"><h3>ATOM feeds</h3></div>
         <form id="web-form" class="settings-form settings-fields">
-          <div class="settings-enable-bar">
-            <label class="switch settings-enable-switch"><input type="checkbox" id="web-enabled" /><span>Enable polling</span></label>
-          </div>
-          <p class="settings-desc muted">Interfaces from Vulnerability Repositories are listed here on install (NVD, EPSS, and ATOM/RSS feeds). Change a URL, add another feed, or delete one. Enable polling only fetches ATOM/RSS — NVD and EPSS stay enrichment lookups.</p>
+          <p class="settings-desc muted">Add or edit ATOM/RSS URLs and the fetch interval. NVD and EPSS in this list stay enrichment lookups — they are not polled. Enable or pause each ATOM feed on Input Sources. Fetch now pulls enabled ATOM feeds; Sync now on a paused feed still pulls that URL.</p>
           <label>Source name
             <input class="input" id="web-name" placeholder="ATOM feeds" />
           </label>
@@ -227,41 +238,20 @@
           <p class="muted">After extract, before Internal systems matching.</p>
         </div>
         <div class="choice-seg" role="group" aria-label="Enrichment stage" data-choice-group="enrich-stage" data-hint-target="enrich-stage-hint">
-          <button type="button" class="choice-seg-btn is-active" data-choice="enable" data-hint="Look up NVD / EPSS and, if configured, rewrite the description with AI. Then match the CVE against Internal systems." aria-pressed="true">Enable</button>
-          <button type="button" class="choice-seg-btn" data-choice="disable" data-hint="Skip NVD, EPSS, and AI. After extract, go straight to matching the ingested CVE against Internal systems." aria-pressed="false">Disable</button>
+          <button type="button" class="choice-seg-btn is-active" data-choice="enable" data-hint="Look up NVD / EPSS. If AI modules are also enabled, the model may rewrite the owner-facing description. Then match against Internal systems." aria-pressed="true">Enable</button>
+          <button type="button" class="choice-seg-btn" data-choice="disable" data-hint="Skip NVD and EPSS. After extract, go straight to matching ingested fields against Internal systems. The AI modules switch still controls extract and matching." aria-pressed="false">Disable</button>
         </div>
       </div>
       <div class="settings-form">
         <p class="choice-hint muted" id="enrich-stage-hint">Look up NVD / EPSS and, if configured, rewrite the description with AI. Then match the CVE against Internal systems.</p>
-        <p class="muted">Internet intel URLs and AI keys stay saved either way. They are used only while this stage is enabled.</p>
+        <p class="muted">NVD and EPSS endpoints stay in Settings → Feeds → ATOM feeds. Enable lookup on Input Sources. Turning this off does not disable AI for extract or matching — use the AI modules tab for that.</p>
         <div class="filters">
           <button class="btn" type="submit">Save</button>
-          <a class="btn-ghost" href="#intel">Internet intel</a>
+          <a class="btn-ghost" href="#feeds/web">ATOM feeds</a>
           <a class="btn-ghost" href="#ai">AI modules</a>
         </div>
         <p class="muted" id="enrich-stage-status"></p>
       </div>
-      </form>
-    </section>
-
-    <section class="panel settings-panel tab-panel" data-panel="intel">
-      <div class="panel-head"><h2>Internet intel</h2></div>
-      <form id="enrich-form" class="settings-form">
-        <p class="muted" id="intel-enrich-off-note" hidden>Enrichment is disabled. NVD, EPSS, and AI will not run until you enable the stage on the Enrichment tab. You can still save URLs and keys here.</p>
-        <p class="muted">Built-in lookup sources are created on install. Change the URL, turn lookup on or off, add another endpoint, or delete a source. Nothing is called until Enrichment is on and the source’s Enable lookup switch is on.</p>
-        <div id="intel-source-list" class="intel-source-list"></div>
-        <div class="filters">
-          <button class="btn-ghost" type="button" id="intel-source-add">Add intel source</button>
-          <button class="btn-ghost" type="button" id="intel-source-restore">Restore NVD &amp; EPSS</button>
-        </div>
-        <label>Ignore CVEs published before
-          <input class="input" id="intel-start" type="date" value="2024-01-01" />
-        </label>
-        <p class="muted">Applies to NVD, ATOM feeds, Local, SMB, and mail. CVE IDs whose year is earlier than this date are skipped.</p>
-        <div class="filters">
-          <button class="btn" type="submit">Save</button>
-        </div>
-        <p class="muted" id="enrich-status"></p>
       </form>
     </section>
 
@@ -270,21 +260,30 @@
       <div class="panel-head">
         <div class="panel-head-copy">
           <h2>AI modules</h2>
-          <p class="muted">Optional. Runs only while Enrichment is enabled.</p>
+          <p class="muted">AI is optional. Off until you save an API key. Then the model can extract a CVE ID regex missed, rewrite ticket text, or infer an owner when Internal systems has no match.</p>
         </div>
-        <div class="choice-seg" role="group" aria-label="Enrichment mode" data-choice-group="ai-enrichment-mode" data-hint-target="ai-mode-hint">
-          <button type="button" class="choice-seg-btn is-active" data-choice="direct" data-hint="The selected provider rewrites the CVE into a clear owner-facing description for Jira, and fills missing fields after NVD/EPSS." aria-pressed="true">EVulnTasker AI</button>
-          <button type="button" class="choice-seg-btn" data-choice="org_llm" data-hint="Enrichment comes from internet feeds (NVD/EPSS). AI is not used to enrich — data is prepared for your org LLM to analyze separately." aria-pressed="false">Org LLM only</button>
+        <div class="choice-seg" role="group" aria-label="AI modules" data-choice-group="ai-stage" data-hint-target="ai-stage-hint">
+          <button type="button" class="choice-seg-btn" data-choice="enable" data-hint="Requires an API key. Use the selected provider when regex/NVD/Internal systems cannot finish the step." aria-pressed="false">Enable</button>
+          <button type="button" class="choice-seg-btn is-active" data-choice="disable" data-hint="No LLM calls anywhere. Tickets still open from Ticketing using ingested/NVD fields and the Message templates." aria-pressed="true">Disable</button>
         </div>
       </div>
       <div class="settings-form">
-        <p class="choice-hint muted" id="ai-mode-hint">The selected provider rewrites the CVE into a clear owner-facing description for Jira, and fills missing fields after NVD/EPSS.</p>
+        <p class="choice-hint muted" id="ai-stage-hint">No LLM calls anywhere. Tickets still open from Ticketing using ingested/NVD fields and the Message templates.</p>
+        <p class="muted" id="ai-disabled-note" hidden>AI is off. Extraction uses regex only, enrichment does not rewrite text, and matching uses Internal systems only. Tickets still open from the Ticketing tab with the Message templates — AI is not required to create them.</p>
+        <div id="ai-enabled-body">
         <ol class="muted muted-list">
-          <li>Turn Enrichment on in the Enrichment tab, or the pipeline skips this stage and matches ingested fields against Internal systems.</li>
-          <li>When enrichment is on, Python (NVD + EPSS) runs first for scores and structured fields.</li>
-          <li>If a provider is enabled with a key and mode is EVulnTasker AI, the model rewrites the CVE description so owners can see what the vulnerability does — and fills any missing vendor/product fields.</li>
-          <li>If the module is off, has no key, or mode is Org LLM only, the NVD/ingest wording is kept and used in Jira as-is.</li>
+          <li>This switch is independent of Enrichment. Disable it if the organization must not call an LLM at all.</li>
+          <li>Extract: regex first; the model is used only when no CVE ID is found.</li>
+          <li>Enrich: NVD/EPSS run first when Enrichment is on. If mode is EVulnTasker AI, the model may rewrite the owner-facing description and fill missing vendor/product.</li>
+          <li>Match: Internal systems first. The model may infer an owner only when nothing matches.</li>
+          <li>Act: Jira, Monday, Email, or Internal CRM still open from Ticketing. Without AI the ticket uses ingested/NVD wording as-is.</li>
         </ol>
+
+        <div class="choice-seg" role="group" aria-label="Enrichment mode" data-choice-group="ai-enrichment-mode" data-hint-target="ai-mode-hint">
+          <button type="button" class="choice-seg-btn is-active" data-choice="direct" data-hint="The selected provider rewrites the CVE into a clear owner-facing description for tickets, and fills missing fields after NVD/EPSS." aria-pressed="true">EVulnTasker AI</button>
+          <button type="button" class="choice-seg-btn" data-choice="org_llm" data-hint="Enrichment comes from internet feeds (NVD/EPSS). AI is not used to enrich — data is prepared for your org LLM to analyze separately." aria-pressed="false">Org LLM only</button>
+        </div>
+        <p class="choice-hint muted" id="ai-mode-hint">The selected provider rewrites the CVE into a clear owner-facing description for tickets, and fills missing fields after NVD/EPSS.</p>
 
         <div class="settings-subtabs" role="tablist" aria-label="AI providers">
           <button class="settings-subtab is-active" type="button" data-subtab="gemini" data-group="ai">Google Gemini</button>
@@ -333,6 +332,7 @@
           <span class="muted" id="ai-key-hint"></span>
         </label>
         </div>
+        </div>
         <div class="filters">
           <button class="btn" type="submit">Save</button>
         </div>
@@ -343,8 +343,8 @@
 
     <section class="panel settings-panel tab-panel" data-panel="assets">
       <div class="panel-head">
-        <h2>Inventory APIs</h2>
-        <p class="muted">Coming later. For now, Internal systems is filled by hand or CSV on the <a class="link" href="/inventory">Internal systems</a> page. These APIs will teach the catalog from CMDB / Sonatype / ITNM when that work starts.</p>
+        <h2>Inventory sources</h2>
+        <p class="muted">CMDB, Sonatype, and ITNM are <strong>not</strong> pipeline steps. They teach the Internal systems catalog: the catalog is built at setup (manual rows or CSV), then sampled on a schedule (typically every 24 hours). Only <strong>new</strong> equipment is inserted. Matching always reads the local catalog, never these APIs per CVE. Connections stay idle until a live CMDB / Sonatype / ITNM host is available. Seed or edit rows on the <a class="link" href="/inventory">Internal systems</a> page.</p>
       </div>
       <div class="settings-subtabs" role="tablist" aria-label="Asset APIs">
         <button class="settings-subtab is-active" type="button" data-subtab="cmdb" data-group="assets">CMDB</button>
@@ -358,7 +358,7 @@
           <div class="settings-enable-bar">
             <label class="switch settings-enable-switch"><input type="checkbox" id="cmdb-enabled" /><span>Enable CMDB integration</span></label>
           </div>
-          <p class="settings-desc muted">Pull the full asset list into the local catalog. Matching does not call this API per CVE.</p>
+          <p class="settings-desc muted">Learns new configuration items from the CMDB and inserts only equipment that is not already in Internal systems. Not called when a CVE is matched.</p>
           <label>Server / host <input class="input" id="cmdb-host" placeholder="cmdb.corp.local" /></label>
           <label>Port <input class="input" id="cmdb-port" type="number" min="1" max="65535" value="443" /></label>
           <label class="switch"><input type="checkbox" id="cmdb-use-tls" checked /><span>Use TLS (HTTPS)</span></label>
@@ -383,9 +383,9 @@
           <div class="settings-enable-bar">
             <label class="switch settings-enable-switch"><input type="checkbox" id="sonatype-enabled" /><span>Enable Sonatype integration</span></label>
           </div>
-          <p class="settings-desc muted">Sync applications and components from Sonatype Nexus Lifecycle / IQ into the local catalog.</p>
-          <label>Server / host <input class="input" id="sonatype-host" placeholder="nexus.corp.local" /></label>
-          <label>Port <input class="input" id="sonatype-port" type="number" min="1" max="65535" value="443" /></label>
+          <p class="settings-desc muted">When Enable is saved, EVulnTasker pulls IQ applications and the libraries from each application's latest report into Internal systems (new rows only). Matching still reads the local catalog, never IQ per CVE. Scheduled refresh uses the 24-hour inventory sync switch.</p>
+          <label>Server / host <input class="input" id="sonatype-host" placeholder="iq.corp.local" /></label>
+          <label>Port <input class="input" id="sonatype-port" type="number" min="1" max="65535" value="8070" /></label>
           <label class="switch"><input type="checkbox" id="sonatype-use-tls" checked /><span>Use TLS (HTTPS)</span></label>
           <label class="switch"><input type="checkbox" id="sonatype-ignore-cert" /><span>Ignore invalid/expired certificate</span></label>
           <label>API path prefix <input class="input" id="sonatype-api-path" placeholder="" /></label>
@@ -408,7 +408,7 @@
           <div class="settings-enable-bar">
             <label class="switch settings-enable-switch"><input type="checkbox" id="itnm-enabled" /><span>Enable ITNM / discovery sync</span></label>
           </div>
-          <p class="settings-desc muted">IBM Tivoli Network Manager or a similar discovery API. Devices are synced into the local catalog (vendor, product, type, version).</p>
+          <p class="settings-desc muted">Learns new devices from IBM Tivoli Network Manager or a similar discovery API (vendor, product, type, version). Inserts only new equipment. Matching still uses Internal systems only.</p>
           <label>Server / host <input class="input" id="itnm-host" placeholder="itnm.corp.local" /></label>
           <label>Port <input class="input" id="itnm-port" type="number" min="1" max="65535" value="443" /></label>
           <label class="switch"><input type="checkbox" id="itnm-use-tls" checked /><span>Use TLS (HTTPS)</span></label>
@@ -432,20 +432,29 @@
     <section class="panel settings-panel tab-panel" data-panel="ticketing">
       <div class="panel-head">
         <h2>Ticketing</h2>
-        <p class="muted">Open owner and threat-hunting tasks in Jira, Monday.com, email (SMTP mail relay), or an internal CRM.</p>
+        <p class="muted">Enable each system separately. After extract and match, EVulnTasker opens owner and hunt tasks from ingested/NVD fields and the Message templates. AI is not required — it only rewrites wording when AI modules are enabled.</p>
       </div>
       <form id="ticket-form" class="settings-form settings-fields">
-        <div class="settings-enable-bar">
-          <label class="switch settings-enable-switch"><input type="checkbox" id="ticketing-enabled" /><span>Enable ticketing integration</span></label>
-        </div>
-
         <div class="settings-subtabs" role="tablist" aria-label="Ticketing providers">
           <button class="settings-subtab is-active" type="button" data-subtab="jira" data-group="ticketing">Jira</button>
           <button class="settings-subtab" type="button" data-subtab="monday" data-group="ticketing">Monday.com</button>
-          <button class="settings-subtab" type="button" data-subtab="email" data-group="ticketing">Email (mail relay)</button>
+          <button class="settings-subtab" type="button" data-subtab="email" data-group="ticketing">Email</button>
           <button class="settings-subtab" type="button" data-subtab="custom" data-group="ticketing">Internal CRM</button>
         </div>
         <input type="hidden" id="ticketing-provider" value="jira" />
+
+        <div class="settings-enable-bar is-inset" data-ticketing-enable="jira">
+          <label class="switch settings-enable-switch"><input type="checkbox" id="ticketing-enabled-jira" /><span>Enable Jira</span></label>
+        </div>
+        <div class="settings-enable-bar is-inset" data-ticketing-enable="monday" hidden>
+          <label class="switch settings-enable-switch"><input type="checkbox" id="ticketing-enabled-monday" /><span>Enable Monday.com</span></label>
+        </div>
+        <div class="settings-enable-bar is-inset" data-ticketing-enable="email" hidden>
+          <label class="switch settings-enable-switch"><input type="checkbox" id="ticketing-enabled-email" /><span>Enable Email</span></label>
+        </div>
+        <div class="settings-enable-bar is-inset" data-ticketing-enable="custom" hidden>
+          <label class="switch settings-enable-switch"><input type="checkbox" id="ticketing-enabled-custom" /><span>Enable Internal CRM</span></label>
+        </div>
 
         <div id="ticketing-http-fields">
         <p class="settings-desc muted">Connection settings shared by all providers (except Monday.com API host).</p>
@@ -472,32 +481,53 @@
           <p class="muted">Monday.com uses api.monday.com — put your API token in the password field above.</p>
         </div>
         <div class="subtab-panel" data-subpanel="email" data-group="ticketing">
-          <p class="muted">Lab / external mail: send owner and hunt tasks through an SMTP mail relay (Postfix, Exchange connector, or any SMTP smart host). Recipients can be any address the relay is allowed to send to.</p>
-          <p class="muted">Owner tasks go to <code>owner_email</code> on each matched Internal system — not one shared mailbox. Hunt tasks go to the hunt address below. Design the mail body in the <a class="link" href="#message">Message</a> tab using AI JSON field names.</p>
-          <h3 class="subhead">Mail relay</h3>
-          <label>SMTP host <input class="input" id="smtp-host" placeholder="relay.corp.local" autocomplete="off" /></label>
-          <label>Port <input class="input" id="smtp-port" type="number" min="1" max="65535" value="25" /></label>
-          <p class="muted" id="smtp-tls-hint">Plain SMTP on port 25. Use STARTTLS (587) or SMTPS (465) when the relay requires encryption.</p>
+          <div class="settings-callout">
+            <p>Send owner and hunt tasks through any SMTP server: an internal mail relay, Exchange connector, Microsoft 365, Gmail, or another provider the relay is allowed to send through.</p>
+            <p>Owner mail goes to <code>owner_email</code> on each matched Internal system. Permanent email always gets a copy when that address is filled. Fallback is used only when a matched system has no owner email. Leave either address blank to skip sending to it. Layout is in the Message tab.</p>
+          </div>
+          <div class="settings-account-chip" id="smtp-stored-account" hidden></div>
+          <h3 class="subhead">SMTP server</h3>
+          <div class="settings-grid-2">
+            <label>SMTP host
+              <input class="input" id="smtp-host" placeholder="smtp.gmail.com" autocomplete="off" />
+              <span class="muted">For Gmail use smtp.gmail.com. Host, port, and encryption are required — not only username and password.</span>
+            </label>
+            <label>Port
+              <input class="input" id="smtp-port" type="number" min="1" max="65535" value="25" />
+            </label>
+          </div>
+          <p class="muted" id="smtp-tls-hint">Plain SMTP on port 25. Use STARTTLS (587) or SMTPS (465) when the server requires encryption.</p>
           <div class="choice-seg" role="group" aria-label="SMTP encryption" data-choice-group="smtp-tls" data-hint-target="smtp-tls-hint">
             <button type="button" class="choice-seg-btn is-active" data-choice="plain" data-hint="No encryption. Typical internal lab relay on port 25." aria-pressed="true">Plain</button>
             <button type="button" class="choice-seg-btn" data-choice="starttls" data-hint="STARTTLS after connect. Usual for port 587." aria-pressed="false">STARTTLS</button>
             <button type="button" class="choice-seg-btn" data-choice="ssl" data-hint="SMTPS from the start. Usual for port 465." aria-pressed="false">SMTPS</button>
           </div>
           <label class="switch"><input type="checkbox" id="smtp-ignore-cert" /><span>Ignore invalid/expired TLS certificate</span></label>
-          <label>Username (optional) <input class="input" id="smtp-username" autocomplete="off" /></label>
-          <label>Password (optional)
-            <input class="input" id="smtp-password" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
-            <span class="muted" id="smtp-password-hint"></span>
+          <div class="settings-grid-2">
+            <label>Username
+              <input class="input" id="smtp-username" autocomplete="username" placeholder="mailer@corp.local" />
+              <span class="muted">Gmail: the full Gmail address. Password: a Gmail App Password, not the normal account password.</span>
+            </label>
+            <label>Password
+              <input class="input" id="smtp-password" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
+              <span class="muted" id="smtp-password-hint"></span>
+            </label>
+          </div>
+          <label>From address
+            <input class="input" id="smtp-from" placeholder="evulntasker@corp.local" />
+            <span class="muted">Shown as the sender. Save after changing it. For Gmail this must be the Username mailbox, or an address already added under Gmail → Send mail as.</span>
           </label>
-          <label>From address <input class="input" id="smtp-from" placeholder="evulntasker@corp.local" /></label>
-          <h3 class="subhead">Recipients</h3>
-          <label>Hunt team email
-            <input class="input" id="ticket-hunt-email" placeholder="threat-hunting@corp.local" />
-          </label>
-          <label>Fallback owner email
-            <input class="input" id="ticket-owner-email" placeholder="soc@corp.local" />
-            <span class="muted">Used only when a matched Internal system has a blank owner_email. Leave blank to skip those systems.</span>
-          </label>
+          <h3 class="subhead">Who receives mail</h3>
+          <div class="settings-grid-2">
+            <label>Permanent email
+              <input class="input" id="ticket-hunt-email" placeholder="soc@corp.local" />
+              <span class="muted">Always send here when this address is filled. Leave blank to skip.</span>
+            </label>
+            <label>Fallback owner email
+              <input class="input" id="ticket-owner-email" placeholder="soc@corp.local" />
+              <span class="muted">Only if a matched system has no owner email. Leave blank to skip.</span>
+            </label>
+          </div>
         </div>
         <div class="subtab-panel" data-subpanel="custom" data-group="ticketing">
           <label>API path <input class="input" id="custom-api-path" placeholder="/api/tickets" value="/api/tickets" /></label>
@@ -509,7 +539,8 @@
           <button class="btn" type="submit">Save</button>
           <button class="btn-ghost" type="button" id="ticketing-test">Test connection</button>
         </div>
-        <p class="muted" id="ticket-status"></p>
+        <p class="muted" id="ticketing-test-hint">Jira: GET /rest/api/3/myself with the saved token.</p>
+        <p class="settings-status" id="ticket-status"></p>
       </form>
     </section>
 
@@ -543,20 +574,37 @@
     </section>
   </div>
 
-  <div class="confirm-overlay" id="reset-modal" hidden role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
+  <div class="confirm-overlay" id="reset-systems-modal" hidden role="dialog" aria-modal="true" aria-labelledby="reset-systems-modal-title">
     <div class="confirm-card">
       <div class="confirm-icon" aria-hidden="true">!</div>
-      <h2 id="reset-modal-title">This will delete all table data</h2>
+      <h2 id="reset-systems-modal-title">This will delete Internal systems</h2>
       <p class="confirm-lead">Are you sure you want to continue?</p>
       <p class="muted">This cannot be undone. Every row in these tables will be permanently removed:</p>
       <ul class="wipe-list">
         <li><strong>Internal systems</strong> — organization products</li>
-        <li><strong>Incoming CVEs</strong> — ingested and entered vulnerabilities, pipeline history, tickets, and detections</li>
+        <li><strong>Asset matches</strong> — CVE-to-system links from that catalog</li>
       </ul>
-      <p class="muted">Database connection, input sources, and integration settings are kept.</p>
+      <p class="muted">Incoming CVEs, database connection, input sources, and integration settings are kept.</p>
       <div class="confirm-actions">
-        <button class="btn-ghost" type="button" id="reset-modal-cancel">Cancel</button>
-        <button class="btn-danger" type="button" id="reset-modal-confirm">Yes, reset the system</button>
+        <button class="btn-ghost" type="button" id="reset-systems-modal-cancel">Cancel</button>
+        <button class="btn-danger" type="button" id="reset-systems-modal-confirm">Yes, reset Internal systems</button>
+      </div>
+    </div>
+  </div>
+  <div class="confirm-overlay" id="reset-cves-modal" hidden role="dialog" aria-modal="true" aria-labelledby="reset-cves-modal-title">
+    <div class="confirm-card">
+      <div class="confirm-icon" aria-hidden="true">!</div>
+      <h2 id="reset-cves-modal-title">This will delete all CVE data</h2>
+      <p class="confirm-lead">Are you sure you want to continue?</p>
+      <p class="muted">This cannot be undone. Every row in these tables will be permanently removed:</p>
+      <ul class="wipe-list">
+        <li><strong>Incoming CVEs</strong> — ingested and entered vulnerabilities</li>
+        <li><strong>Pipeline history</strong> — ingest events, tickets, and detections</li>
+      </ul>
+      <p class="muted">Internal systems, database connection, input sources, and integration settings are kept.</p>
+      <div class="confirm-actions">
+        <button class="btn-ghost" type="button" id="reset-cves-modal-cancel">Cancel</button>
+        <button class="btn-danger" type="button" id="reset-cves-modal-confirm">Yes, delete all CVEs</button>
       </div>
     </div>
   </div>
@@ -566,27 +614,6 @@
       <input class="input atom-feed-url" placeholder="https://vendor.example/atom.xml" />
       <input type="hidden" class="atom-feed-type" value="atom" />
       <button class="icon-btn atom-feed-remove" type="button" title="Remove feed">✕</button>
-    </div>
-  </template>
-  <template id="tpl-intel-source">
-    <div class="intel-source-card" data-intel-card>
-      <div class="smb-location-head">
-        <input class="input intel-name" placeholder="Source name" />
-        <button class="icon-btn intel-remove" type="button" title="Remove source">✕</button>
-      </div>
-      <input type="hidden" class="intel-id" value="" />
-      <label>Type
-        <select class="input intel-type">
-          <option value="nvd">NVD 2.0</option>
-          <option value="epss">FIRST EPSS</option>
-        </select>
-      </label>
-      <label>URL <input class="input intel-url" placeholder="https://" /></label>
-      <label class="switch"><input type="checkbox" class="intel-enabled" /><span>Enable lookup</span></label>
-      <label class="intel-key-wrap">API key (optional)
-        <input class="input intel-key" type="password" placeholder="unchanged if left blank" autocomplete="new-password" />
-        <span class="muted intel-key-hint"></span>
-      </label>
     </div>
   </template>
   <template id="tpl-smb-location">
@@ -604,5 +631,5 @@
   </template>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/settings.js?v={{ version }}-atom3"></script>
+<script src="/static/js/settings.js?v={{ version }}-smtpfrom1"></script>
 {% endblock %}

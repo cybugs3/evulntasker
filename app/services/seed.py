@@ -16,8 +16,8 @@ REPOS = [
         endpoint="https://services.nvd.nist.gov/rest/json/cves/2.0",
         enabled=False,
         sync_status="idle",
-        raw_count=280_000,
-        notes="National Vulnerability Database — source of record for CVE metadata. Enable lookup in Settings → Internet intel.",
+        raw_count=0,
+        notes="National Vulnerability Database — source of record for CVE metadata. Enable lookup on this page or under Settings → Feeds → ATOM.",
         config={"intel_managed": True},
     ),
     dict(
@@ -26,8 +26,8 @@ REPOS = [
         endpoint="https://api.first.org/data/v1/epss",
         enabled=False,
         sync_status="idle",
-        raw_count=280_000,
-        notes="Exploit Prediction Scoring System probabilities. Enable lookup in Settings → Internet intel.",
+        raw_count=0,
+        notes="Exploit Prediction Scoring System probabilities. Enable lookup on this page or under Settings → Feeds → ATOM.",
         config={"intel_managed": True},
     ),
 ]

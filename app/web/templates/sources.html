@@ -1,14 +1,24 @@
 {% extends "base.html" %}
 {% block title %}Input Sources{% endblock %}
-{% block heading %}Manage Input Sources{% endblock %}
-{% block lede %}Monitor active feeds, CVEs received per source, and pipeline status.{% endblock %}
+{% block heading %}Input Sources{% endblock %}
+{% block lede %}Enable/Pause controls automatic polling. Sync now pulls once even if the feed is paused. Connection details stay under Settings → Feeds. ATOM feeds are enabled per URL. NVD and EPSS Enable is lookup during enrichment, not ingest.{% endblock %}
 {% block actions %}
+  <span class="updated-stamp" id="page-updated">Updated —</span>
   <a class="btn" href="/settings#feeds">Configure sources</a>
 {% endblock %}
 {% block content %}
+  <section class="panel inline-cve-bar">
+    <form id="inline-cve-form" class="inline-cve-row">
+      <span class="inline-cve-label">Inline CVE</span>
+      <input class="input mono" id="inline-cve" placeholder="CVE-2024-1234" autocomplete="off" />
+      <button class="btn" type="submit" id="inline-submit">Ingest CVE</button>
+      <p class="muted" id="inline-status"></p>
+    </form>
+  </section>
+
   <section class="panel">
     <div class="panel-head">
-      <h2>Input sources table</h2>
+      <h2>Feeds</h2>
       <div class="filters">
         <input id="source-search" class="input" placeholder="Search sources…" />
         <select id="source-type-filter" class="input">
@@ -22,10 +32,10 @@
           <tr>
             <th>Source</th>
             <th>Type</th>
+            <th>Endpoint</th>
             <th>Status</th>
-            <th>Data type</th>
-            <th>Last update</th>
-            <th title="Unique CVE IDs received since this source was connected">CVEs</th>
+            <th>Last sync</th>
+            <th title="Unique CVE records stored in Incoming CVEs. NVD and EPSS count records that actually received that lookup during enrichment.">CVEs</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -42,17 +52,20 @@
         <div class="muted" data-slot="desc"></div>
       </td>
       <td data-slot="type"></td>
+      <td class="mono repo-endpoint" data-slot="endpoint"></td>
       <td data-slot="status"></td>
-      <td data-slot="data-type"></td>
       <td data-slot="updated"></td>
       <td class="mono" data-slot="cves"></td>
-      <td class="row-actions">
-        <button class="icon-btn" type="button" data-act="toggle" data-slot="toggle"></button>
-        <a class="icon-btn" data-slot="edit" title="Edit in Settings">✎</a>
+      <td>
+        <div class="row-actions">
+          <button class="btn btn-ghost btn-sm" type="button" data-act="toggle" data-slot="toggle"></button>
+          <button class="btn btn-ghost btn-sm" type="button" data-act="sync">Sync now</button>
+          <a class="btn btn-ghost btn-sm" data-slot="edit">Settings</a>
+        </div>
       </td>
     </tr>
   </template>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/sources.js?v={{ version }}"></script>
+<script src="/static/js/sources.js?v={{ version }}-cvecount1"></script>
 {% endblock %}

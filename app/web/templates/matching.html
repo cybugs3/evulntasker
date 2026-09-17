@@ -1,15 +1,34 @@
 {% extends "base.html" %}
 {% block title %}Asset matching{% endblock %}
 {% block heading %}Asset matching{% endblock %}
-{% block lede %}Match enriched vendor/product/version against Internal systems. That database is filled by hand or CSV — automatic CMDB/Sonatype/ITNM learning comes later.{% endblock %}
+{% block lede %}Match enriched vendor/product/version against the Internal systems catalog. That catalog is maintained separately from the CVE pipeline. Unmatched CVEs stay here — tickets are not opened until a match exists.{% endblock %}
 {% block actions %}
   <a class="btn-ghost" href="/inventory">Internal systems</a>
+  <span class="updated-stamp" id="page-updated">Updated —</span>
 {% endblock %}
 {% block content %}
+  <section class="sources-kpis" id="stage-kpis">
+    <div class="main-tile">
+      <div class="kpi-label">Waiting</div>
+      <div class="kpi-value" data-k="waiting">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Matched</div>
+      <div class="kpi-value ok" data-k="matched">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Unmatched</div>
+      <div class="kpi-value danger" data-k="unmatched">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">AI</div>
+      <div class="kpi-value" data-k="ai_fallback">—</div>
+    </div>
+  </section>
   <section class="panel">
     <div class="panel-head">
       <h2>Asset cross-reference</h2>
-      <p class="muted">Compares CVE vendor/product/version to Internal systems, including OS families (a Linux kernel CVE matches Red Hat / Ubuntu and product type linux). Unmatched CVEs may use targeted AI for ownership without adding catalog rows.</p>
+      <p class="muted">Compares CVE vendor/product/version to Internal systems, including OS families (a Linux kernel CVE matches Red Hat / Ubuntu and product type linux). CMDB / Sonatype / ITNM do not run here — they only add new equipment to that catalog on a schedule. Unmatched CVEs stay on this stage; Actions runs only after a match.</p>
     </div>
     <div class="table-wrap">
       <table class="data">
@@ -44,5 +63,5 @@
   </template>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/stage.js?v={{ version }}" data-stage="matching"></script>
+<script src="/static/js/stage.js?v={{ version }}-waitto1" data-stage="matching"></script>
 {% endblock %}

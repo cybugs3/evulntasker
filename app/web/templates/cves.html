@@ -1,54 +1,94 @@
 {% extends "base.html" %}
 {% block title %}Incoming CVEs{% endblock %}
 {% block heading %}Incoming CVEs{% endblock %}
-{% block lede %}Database of CVEs received by EVulnTasker. Matching later compares vendor, product, type, and version against Internal systems.{% endblock %}
+{% block lede %}Database of CVEs received by EVulnTasker. Click a row for Live Workflow stations. The CVE ID opens the full record. Matching later compares vendor, product, type, and version against Internal systems.{% endblock %}
 {% block actions %}
   <a class="btn-ghost" href="/inventory">Internal systems</a>
   <a class="btn-ghost" href="/status">Status</a>
 {% endblock %}
 {% block content %}
-  <section class="panel">
+  <section class="panel" id="cve-panel">
     <div class="panel-head">
       <h2>CVE database</h2>
       <div class="filters">
         <input id="cve-filter" class="input" placeholder="Filter by name, vendor, product…" />
+        <button class="btn-ghost select-start" type="button" id="cve-select-start">Select to delete</button>
+        <div class="select-bar" id="cve-select-bar">
+          <span class="muted" id="cve-select-count"></span>
+          <button class="btn-ghost" type="button" id="cve-select-cancel">Cancel</button>
+          <button class="btn-danger" type="button" id="cve-select-ok" disabled>OK</button>
+        </div>
       </div>
     </div>
+    <p class="muted select-status" id="cve-select-status"></p>
     <div class="table-wrap">
-      <table class="data">
+      <table class="data cve-table">
         <thead>
           <tr>
-            <th>Vulnerability</th>
-            <th>Description</th>
+            <th class="select-col"><input type="checkbox" id="cve-select-all" aria-label="Select all visible CVEs" /></th>
+            <th class="col-cve">Vulnerability</th>
+            <th class="col-desc">Description</th>
             <th>Vendor</th>
             <th>Product</th>
             <th>Product type</th>
             <th>Product version</th>
-            <th>Severity</th>
+            <th class="col-sev">Severity</th>
             <th>Source</th>
+            <th class="col-match">Match</th>
           </tr>
         </thead>
         <tbody id="cve-tbody">
-          <tr><td colspan="8" class="empty">Loading CVEs…</td></tr>
+          <tr><td colspan="9" class="empty">Loading CVEs…</td></tr>
         </tbody>
       </table>
     </div>
   </section>
+  <div class="confirm-overlay" id="cve-select-modal" hidden role="dialog" aria-modal="true" aria-labelledby="cve-select-modal-title">
+    <div class="confirm-card">
+      <div class="confirm-icon" aria-hidden="true">!</div>
+      <h2 id="cve-select-modal-title">This will delete the selected CVEs</h2>
+      <p class="confirm-lead">Are you sure you want to continue?</p>
+      <p class="muted">This cannot be undone. Related tickets, detections, matches, and pipeline history for those CVEs will also be removed.</p>
+      <div class="confirm-actions">
+        <button class="btn-ghost" type="button" id="cve-select-modal-cancel">Cancel</button>
+        <button class="btn-danger" type="button" id="cve-select-modal-confirm">Yes, delete</button>
+      </div>
+    </div>
+  </div>
   <template id="tpl-cve-row">
     <tr class="clickable">
-      <td class="mono">
+      <td class="select-col"><input type="checkbox" data-select /></td>
+      <td class="mono cell-clip col-cve">
         <a class="link" data-slot="cve-link"></a>
       </td>
-      <td class="cell-desc" data-slot="description"></td>
-      <td data-slot="vendor"></td>
-      <td data-slot="product"></td>
-      <td data-slot="product-type"></td>
-      <td class="mono" data-slot="version"></td>
-      <td data-slot="severity"></td>
-      <td data-slot="source"></td>
+      <td class="cell-clip col-desc" data-slot="description"></td>
+      <td class="cell-clip" data-slot="vendor"></td>
+      <td class="cell-clip" data-slot="product"></td>
+      <td class="cell-clip" data-slot="product-type"></td>
+      <td class="mono cell-clip" data-slot="version"></td>
+      <td class="col-sev" data-slot="severity"></td>
+      <td class="cell-clip" data-slot="source"></td>
+      <td class="col-match" data-slot="match"></td>
     </tr>
+  </template>
+  <template id="tpl-cve-journey">
+    <tr class="journey-row">
+      <td colspan="9" data-slot="journey-cell">
+        <div class="journey-inline">
+          <p class="muted journey-loading">Loading stations…</p>
+          <ol class="stations-h"></ol>
+        </div>
+      </td>
+    </tr>
+  </template>
+  <template id="tpl-cve-station">
+    <li class="station-h">
+      <div class="station-index" data-slot="index"></div>
+      <div class="station-title" data-slot="title"></div>
+      <div class="muted" data-slot="detail"></div>
+    </li>
   </template>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/cves.js?v={{ version }}-idonly"></script>
+<script src="/static/js/cves.js?v={{ version }}-selectdel1"></script>
 {% endblock %}

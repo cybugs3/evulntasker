@@ -106,6 +106,13 @@ class VulnerabilityOut(ORMModel):
     ai_matching_used: bool
     created_at: datetime
     tickets: list[TicketOut] = []
+    station: str | None = None
+    station_label: str | None = None
+    run: str | None = None
+    run_label: str | None = None
+    filter_key: str | None = None
+    unmatched: bool = False
+    waiting: bool = False
 
     @field_validator("status", mode="before")
     @classmethod

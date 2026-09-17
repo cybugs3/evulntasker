@@ -2,7 +2,7 @@
 Production logging for a Linux service.
 
 Logs go to both stderr (journald/systemd captures this) and a rotating
-file under VULNINTEL_LOG_DIR. Structured extra fields are attached so
+file under EVULNTASKER_LOG_DIR (VULNINTEL_LOG_DIR still accepted). Structured extra fields are attached so
 pipeline steps can be grepped by cve_id / run_id.
 """
 

@@ -1,75 +1,66 @@
 let sources = [];
 
 const TYPE_LABELS = {
+  nvd: "NVD lookup",
+  epss: "EPSS lookup",
+  atom: "ATOM feed",
+  exploitdb: "Exploit-DB",
+  inline: "Inline CVE",
   smb: "SMB share",
   local: "Local folder",
   outlook: "Outlook / Exchange",
   web_api: "ATOM feed",
 };
 
-const DATA_TYPES = {
-  smb: "CVEs",
-  local: "CVEs",
-  outlook: "Alerts",
-  web_api: "CVEs",
-};
-
-function typeLabel(source) {
-  return TYPE_LABELS[source.source_type] || source.source_type || "Unknown";
-}
-
-function dataType(source) {
-  return DATA_TYPES[source.source_type] || "CVEs";
-}
-
 const FEED_SUBTABS = {
   smb: "smb",
   local: "local",
   outlook: "exchange",
   email: "exchange",
+  atom: "web",
   web_api: "web",
   api_feed: "web",
   webhook: "web",
+  nvd: "web",
+  epss: "web",
 };
 
+const NO_SYNC_TYPES = new Set(["inline", "nvd", "epss"]);
+
+function typeLabel(source) {
+  return TYPE_LABELS[source.feed_type] || source.feed_type || "Unknown";
+}
+
 function settingsEditHref(source) {
-  const subtab = FEED_SUBTABS[source.source_type];
+  const subtab = FEED_SUBTABS[source.feed_type];
   return subtab ? `/settings#feeds/${subtab}` : "/settings#feeds";
 }
 
-function fmtRelative(value) {
-  if (!value) return "—";
-  const then = new Date(value);
-  if (Number.isNaN(then.getTime())) return String(value);
-  const sec = Math.max(0, Math.round((Date.now() - then.getTime()) / 1000));
-  if (sec < 60) return `${sec} seconds ago`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
-  const hour = Math.round(min / 60);
-  if (hour < 24) return `${hour} hour${hour === 1 ? "" : "s"} ago`;
-  const day = Math.round(hour / 24);
-  return `${day} day${day === 1 ? "" : "s"} ago`;
+function cveCount(source) {
+  return source.cve_count != null ? source.cve_count : 0;
 }
 
 function statusEl(source) {
   if (!source.enabled) return labeledPill("st-paused", "Off");
-  if (source.last_error) return labeledPill("st-error", "Error");
-  return labeledPill("st-ok", "Active");
+  if (source.last_error || source.sync_status === "error") return labeledPill("st-error", "Error");
+  if (source.sync_status === "ok") return labeledPill("st-ok", "Active");
+  if (source.sync_status === "syncing") return labeledPill("st-syncing", "Syncing");
+  return labeledPill("st-idle", "Idle");
 }
 
 function filteredSources() {
   const q = (document.getElementById("source-search").value || "").toLowerCase();
   const type = document.getElementById("source-type-filter").value;
   return sources.filter((s) => {
-    const hay = `${s.name} ${s.source_type} ${s.description || ""}`.toLowerCase();
-    return (!q || hay.includes(q)) && (!type || s.source_type === type);
+    const hay = `${s.name} ${s.feed_type} ${s.endpoint || ""} ${s.notes || ""}`.toLowerCase();
+    return (!q || hay.includes(q)) && (!type || s.feed_type === type);
   });
 }
 
 function fillTypeFilter() {
   const select = document.getElementById("source-type-filter");
   const current = select.value;
-  const types = [...new Set(sources.map((s) => s.source_type).filter(Boolean))];
+  const types = [...new Set(sources.map((s) => s.feed_type).filter(Boolean))];
   select.replaceChildren();
   const all = document.createElement("option");
   all.value = "";
@@ -95,38 +86,73 @@ function renderTable() {
   rows.forEach((s) => {
     const tr = useTemplate("tpl-source-row");
     slot(tr, "name").textContent = s.name;
-    slot(tr, "desc").textContent = s.description || "";
+    slot(tr, "desc").textContent = s.notes || "";
     slot(tr, "type").textContent = typeLabel(s);
+    slot(tr, "endpoint").textContent = s.endpoint || "—";
     slot(tr, "status").replaceChildren(statusEl(s));
-    slot(tr, "data-type").textContent = dataType(s);
-    slot(tr, "updated").textContent = fmtRelative(s.last_event_at);
-    slot(tr, "cves").textContent = fmtNum(s.cve_count != null ? s.cve_count : s.event_count);
+    slot(tr, "updated").textContent = fmtTime(s.last_sync_at);
+    slot(tr, "cves").textContent = fmtNum(cveCount(s));
     const toggle = slot(tr, "toggle");
     toggle.dataset.id = String(s.id);
-    toggle.title = s.enabled ? "Pause" : "Activate";
-    toggle.textContent = s.enabled ? "❚❚" : "▶";
-    slot(tr, "edit").href = settingsEditHref(s);
+    toggle.textContent = s.enabled ? "Pause" : "Enable";
+    const sync = tr.querySelector("[data-act=sync]");
+    sync.dataset.id = String(s.id);
+    if (NO_SYNC_TYPES.has(s.feed_type)) sync.hidden = true;
+    const edit = slot(tr, "edit");
+    if (s.feed_type === "inline") {
+      edit.hidden = true;
+    } else {
+      edit.href = settingsEditHref(s);
+    }
     tbody.appendChild(tr);
   });
 }
 
 async function loadSources() {
-  sources = await api("/api/sources");
+  sources = await api("/api/repositories");
   fillTypeFilter();
   renderTable();
+  stampUpdated(true);
 }
 
 document.getElementById("source-tbody").addEventListener("click", async (ev) => {
   const toggle = ev.target.closest("[data-act=toggle]");
-  if (!toggle) return;
-  ev.stopPropagation();
-  await api(`/api/sources/${toggle.dataset.id}/toggle`, { method: "POST" });
-  await loadSources();
+  const sync = ev.target.closest("[data-act=sync]");
+  try {
+    if (toggle?.dataset.id) {
+      ev.stopPropagation();
+      await api(`/api/repositories/${toggle.dataset.id}/toggle`, { method: "POST" });
+      await loadSources();
+      return;
+    }
+    if (sync?.dataset.id) {
+      ev.stopPropagation();
+      await api(`/api/repositories/${sync.dataset.id}/sync`, { method: "POST" });
+      await loadSources();
+    }
+  } catch (err) {
+    stampUpdated(false);
+    window.alert(err.message || String(err));
+  }
 });
 
 document.getElementById("source-search").addEventListener("input", renderTable);
 document.getElementById("source-type-filter").addEventListener("change", renderTable);
 
+document.addEventListener("inline-cve-queued", () => {
+  loadSources().catch((err) => {
+    stampUpdated(false);
+    console.error(err);
+  });
+});
+
 loadSources().catch((err) => {
+  stampUpdated(false);
   setEmptyRow(document.getElementById("source-tbody"), 7, `Failed to load sources: ${err.message}`);
 });
+setInterval(() => {
+  loadSources().catch((err) => {
+    stampUpdated(false);
+    console.error(err);
+  });
+}, 30000);

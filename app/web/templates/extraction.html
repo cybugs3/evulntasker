@@ -3,13 +3,14 @@
 {% block heading %}Extraction{% endblock %}
 {% block lede %}CVE IDs taken from ingested files and feeds.{% endblock %}
 {% block actions %}
-  <a class="btn-ghost" href="/settings#ai">AI fallback settings</a>
+  <a class="btn-ghost" href="/settings#ai">AI settings</a>
+  <span class="updated-stamp" id="page-updated">Updated —</span>
 {% endblock %}
 {% block content %}
   <section class="panel">
     <div class="panel-head">
       <h2>Recent ingest events</h2>
-      <p class="muted">One row per CVE. Already-known IDs are not listed again.</p>
+      <p class="muted">One row per file or feed item. Adding more CVE IDs to the same file updates that row instead of creating another.</p>
     </div>
     <div class="table-wrap">
       <table class="data">
@@ -29,7 +30,10 @@
     </div>
   </section>
   <section class="panel">
-    <div class="panel-head"><h2>CVE records at this stage</h2></div>
+    <div class="panel-head">
+      <h2>Extracted CVE records</h2>
+      <p class="muted">Every CVE pulled from a file or feed. Status is where it is now — enrichment and later stages stay listed here.</p>
+    </div>
     <div class="table-wrap">
       <table class="data">
         <thead>
@@ -70,5 +74,5 @@
   </template>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/stage.js?v={{ version }}" data-stage="extraction"></script>
+<script src="/static/js/stage.js?v={{ version }}-waitto1" data-stage="extraction"></script>
 {% endblock %}

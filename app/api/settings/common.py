@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.source import InputSource
 
 SOURCES = {
+    "inline": ("Inline CVE", "inline", "CVE IDs entered by an operator. Runs the full pipeline and is saved."),
     "smb": ("SMB share", "smb", "CVE files from an SMB/CIFS share (AD/LDAP)."),
     "local": ("Local folder", "local", "CVE files from a folder on this server."),
     "outlook": ("Outlook / Exchange", "outlook", "On-prem Exchange mailbox listener."),
@@ -47,7 +48,7 @@ def get_or_create_source(db: Session, key: str) -> InputSource:
     source = InputSource(
         name=_unique_source_name(db, default_name),
         description=description,
-        enabled=False,
+        enabled=key == "inline",
         config={},
     )
     source.source_type = source_type
@@ -220,10 +221,7 @@ def public_source(source: InputSource, extra: dict[str, Any] | None = None) -> d
 
 
 def record_source_error(source: InputSource, message: str | None) -> None:
-    """Keep last_error only while the source is enabled. Off sources are not failures."""
-    if not source.enabled:
-        source.last_error = None
-        return
+    """Store the last pull error. Pause still shows it after a manual Sync now."""
     text = (message or "").strip()
     source.last_error = text or None
 
@@ -231,7 +229,6 @@ def record_source_error(source: InputSource, message: str | None) -> None:
 def save_source_cfg(source: InputSource, body: BaseModel, keys: list[str]) -> None:
     cfg = dict(source.config or {})
     data = body.model_dump()
-    source.enabled = bool(data.get("enabled"))
     for key in keys:
         if key in {"password", "token"}:
             if data.get(key):

@@ -2,37 +2,100 @@
 
 **Elizarov Vulnrabilities Tasking Manager Platform**
 
-AI-Powered RBVM — Risk-Based Vulnerability Management platform for Linux (RHEL / Ubuntu).
+AI-Powered RBVM — Risk-Based Vulnerability Management for Linux (RHEL / Ubuntu).
 
-EVulnTasker ingests CVE intelligence, enriches it, matches it to organizational assets, and opens owner and threat-hunting tasks — including Sigma rules and SIEM hunting queries.
+EVulnTasker ingests CVE intelligence from files, mail, and ATOM feeds, extracts identifiers, optionally enriches from NVD/EPSS, matches vendor/product against a local Internal systems catalog, and opens owner and threat-hunting tasks (Jira, Monday.com, email, or an internal CRM). Sigma rules and SIEM hunting queries are generated in the same Act step.
 
-The user interface is **English only**.
+The user interface is **English only**. There is no login.
+
+Default URL after start: `http://127.0.0.1:8080` (service bind `0.0.0.0:8080`).
+
+A Hebrew module catalog lives in [`FUNCTIONALITY.md`](FUNCTIONALITY.md). Remaining work is listed in [`GAPS.md`](GAPS.md).
 
 ---
 
 ## What it does
 
-| Step | Name | Description |
-|------|------|-------------|
-| 1 | **Ingest** | Webhooks, scheduled API feeds, Exchange mailbox, SMB/CIFS file share |
-| 2 | **Extract** | CVE regex plus vendor / product / version from labeled text, CSV, JSON, or CPE |
-| 3 | **Enrich** | NVD 2.0 (CVSS, CWE, attack vector) + FIRST EPSS; AI fills remaining gaps |
-| 4 | **Match** | CMDB, Sonatype, and local inventory; AI ownership fallback |
-| 5 | **Act** | Jira tasks for owners and hunters, Exchange mail, DB status |
+| Step | Name | What actually runs |
+|------|------|---------------------|
+| 1 | **Ingest** | Local folder, SMB/CIFS, Outlook/Exchange mailbox, ATOM/RSS feeds |
+| 2 | **Extract** | CVE regex plus vendor / product / version from labeled text, CSV, JSON, or CPE. LLM only if no CVE ID is found and AI modules are enabled |
+| 3 | **Enrich** | Optional. When on: NVD 2.0 (CVSS, CWE, attack vector) + FIRST EPSS. LLM rewrite only if AI is on and mode is **EVulnTasker AI**. When off: skip lookups and continue to matching |
+| 4 | **Match** | Local **Internal systems** catalog only. That catalog is seeded at setup (hand/CSV) and later taught by CMDB / Sonatype / ITNM on a schedule (new equipment only) — those APIs are not called here. Linux kernel CVEs also hit distro OS rows. LLM may infer an owner only if nothing matches and AI is on — it does not invent catalog rows |
+| 5 | **Act** | Per-provider tickets (Jira, Monday.com, Email, Internal CRM), Sigma/SIEM detections, optional Exchange/Gmail notify. Tickets use **Message** templates. AI is not required |
 
-If Jira, Exchange, or AI keys are not configured, the pipeline still completes in **dry-run** mode (no credentials required for demos).
+A CVE already in the database is not run through enrich/match/act again, except ATOM feed refreshes which update fields and re-enrich.
 
 ---
 
 ## Screens
 
-- **Dashboard** — CVE queue, severity, pipeline status
-- **Input Sources** — webhooks, API feeds, mailbox listeners
-- **Repositories** — NVD, EPSS, and other intelligence feeds
-- **Settings** — system database (SQLite, local PostgreSQL on this Linux host, or external PostgreSQL) plus SMB/CIFS, local folder, Outlook, and Web API sources
-- **Vulnerability detail** — enrichment, asset matches, tickets, detections
+Sidebar groups:
 
-Default URL after start: `http://127.0.0.1:8080`
+**Overview Dashboards**
+
+- **Main** — pipeline KPIs
+- **Status** — live CVE queue (stage, priority, owner team, tickets)
+
+**Databases**
+
+- **Internal systems** — in-org products. Seeded by hand or CSV; Sonatype IQ harvests applications and libraries on Enable save; CMDB / ITNM add only new equipment on a schedule
+- **Incoming CVEs** — every CVE stored by EVulnTasker. Click a row for Live Workflow stations; the CVE ID opens the full record
+
+**Pipeline**
+
+- **Input Sources** — Local / SMB / Outlook / ATOM (one row per ATOM URL) plus NVD/EPSS lookup Enable. Enable/Pause is auto-poll; Sync now pulls once even if paused. Connection details stay under Settings → Feeds
+- **Extraction** — ingest events (one row per file or feed item) and extracted CVE records
+- **Enrichment** — NVD/EPSS/AI fill; records stay listed after later stages
+- **Asset matching** — hits against Internal systems
+- **Actions** — owner ticket, hunt ticket, detections
+
+**System**
+
+- **Debugger** — walk a CVE through every stage using live Settings. Each stage explains what ran, who matched and why (or why not), and who would be notified. Nothing is stored and nothing is sent
+- **Settings** — database, reset, feeds, enrichment, intel, AI, inventory teachers (CMDB / Sonatype / ITNM), ticketing, message layout
+
+CVE detail (`/vulnerabilities/{cve_id}`): description, matches, tickets, hunting pack, audit trail, **Re-run pipeline**.
+
+Health check: `GET /healthz`.
+
+---
+
+## Settings
+
+| Tab | Purpose |
+|-----|---------|
+| **Database** | SQLite, local PostgreSQL on this Linux host, or external PostgreSQL. Existing SQLite rows are not copied |
+| **Reset** | Two separate wipes. **Reset Internal systems** deletes the catalog and match links. **Delete all CVEs** removes Incoming CVEs plus pipeline history, tickets, and detections. Each asks for confirmation. Keeps DB connection, feed configs, and integration settings |
+| **Feeds** | Local folder, SMB, Outlook/Exchange, ATOM URLs and intervals. Enable/Pause and Sync now live on **Input Sources**. ATOM polling does **not** fetch NVD/EPSS — those stay enrichment lookups |
+| **Enrichment** | Enable / Disable the enrich stage (`ENRICHMENT_ENABLED`). Independent of AI |
+| **Internet intel** | NVD / EPSS lookup URLs, per-source **Enable lookup**, optional API keys. **Ignore CVEs published before** (`INTEL_START_DATE`) applies to **every ingest path**: Local, SMB, Outlook/Exchange, ATOM, inline CVE, webhooks, and the Debugger. A CVE already stored can still be enriched by ID |
+| **AI modules** | Global Enable / Disable (`AI_ENABLED`). When on, pick one provider (Gemini, ChatGPT, Azure OpenAI, GitHub Copilot) and a mode (see below) |
+| **Inventory** | CMDB / ITNM teach Internal systems on a schedule (typically 24 hours, new equipment only). Sonatype IQ also harvests on Enable save (apps + libraries from the latest report). They are not pipeline steps. Matching always reads the local catalog (`INVENTORY_SYNC_ENABLED` defaults off until a live host exists) |
+| **Ticketing** | Separate Enable for Jira, Monday.com, Email (SMTP), Internal CRM. Hunt **Permanent email**; fallback owner email only when Internal systems `owner_email` is blank |
+| **Message** | Owner and hunt subject/body templates (`{{cve_id}}`, `{{summary}}`, …). Used even when AI is off |
+
+### AI modes (only when AI is enabled)
+
+| Mode | Enrichment | Extract / Match |
+|------|-----------|-----------------|
+| **EVulnTasker AI** | After NVD/EPSS, the selected provider may rewrite the owner-facing description and fill missing vendor/product | LLM fallback still allowed |
+| **Org LLM only** | No rewrite inside EVulnTasker; NVD/ingest wording is kept | Extract/match LLM still allowed |
+
+**Disable** on the same tab turns off **all** LLM calls. Tickets still open from Ticketing + Message.
+
+---
+
+## Ingest details
+
+| Source | Notes |
+|-------|--------|
+| **Local folder** | Path on the EVulnTasker **Linux host**, not on the analyst PC. `.txt`, HTML, CSV, JSON, logs. Each file is kept as an Extraction ingest event, including files that add only one new CVE or whose IDs were already known. Subject to `INTEL_START_DATE` |
+| **SMB / CIFS** | One or more locations, shared AD/LDAP account. Subject to `INTEL_START_DATE` |
+| **Outlook / Exchange** | On-prem unread mail scanned for CVE IDs. Subject to `INTEL_START_DATE` |
+| **ATOM / RSS** | Seeded on install (CISA, Ubuntu, Microsoft MSRC, Exploit-DB). Subject to `INTEL_START_DATE` |
+
+`POST /api/webhooks/{token}` still exists in the API. There is **no** webhook Settings UI; leftover webhook source rows are cleaned up.
 
 ---
 
@@ -40,91 +103,54 @@ Default URL after start: `http://127.0.0.1:8080`
 
 Single Linux process (systemd unit `evulntasker`):
 
-- FastAPI HTTP API + Jinja2 dashboard
-- In-process asyncio pipeline worker
-- APScheduler for feed / mailbox polling
+- FastAPI HTTP API + Jinja2 UI
+- In-process asyncio pipeline worker (events persisted first, then drained)
+- APScheduler for Local / SMB / Outlook / ATOM polling, and for Internal systems sampling when inventory sync is enabled
 
-Optional: Celery + Redis for multi-node workers (not required for a single host).
+Optional: Celery + Redis for multi-node workers (not required on a single host).
 
-Data store: **SQLite** for development and first install, **PostgreSQL** for production.
+Data store: **SQLite** for first install, **PostgreSQL** for production (`Settings → Database`).
+
+If a ticketing provider is enabled but not configured, that provider stores a **dry-run** ticket (pipeline still completes). Missing AI keys are not dry-run — the LLM is simply skipped.
 
 ---
 
 ## Python stack
 
-Requires **Python 3.11+** (3.12 / 3.13 / 3.14 are supported).
-
-### Standard library
-
-| Module | Used for |
-|--------|---------|
-| `asyncio` | In-process work queue |
-| `logging` / `logging.handlers` | journald + rotating file logs |
-| `pathlib` | Paths for data, logs, static files |
-| `json` | Webhook / AI payloads |
-| `re` | CVE identifier extraction (`CVE-YYYY-NNNNN`) |
-| `secrets` | Webhook tokens |
-| `datetime` | Timestamps (UTC) |
-| `functools` | Cached settings (`lru_cache`) |
-| `dataclasses` | Extraction results |
-| `contextlib` | FastAPI lifespan |
-| `typing` / `collections.abc` | Type hints |
-| `importlib.util` | `app.py` launcher (loads the `app/` package) |
-| `socket` | LAN URL printed at startup |
-| `os`, `sys` | Process / venv launcher |
+Requires **Python 3.11+** (3.12 / 3.13 / 3.14 are supported; `psycopg2-binary` is skipped on 3.14).
 
 ### Third-party packages (`requirements.txt`)
 
 | Package | Role |
-|---------|--------|
-| **FastAPI** | REST API and application framework |
-| **Uvicorn** | ASGI server |
-| **Starlette** | HTTP primitives (via FastAPI) |
-| **Jinja2** | HTML dashboard templates |
-| **python-multipart** | Form / multipart parsing |
+|---------|------|
+| **FastAPI** / **Uvicorn** / **Starlette** | HTTP API and ASGI server |
+| **Jinja2** / **python-multipart** | HTML UI and forms |
 | **orjson** | Fast JSON |
-| **Pydantic** / **pydantic-settings** | Validation and `.env` configuration |
-| **SQLAlchemy 2** | ORM (SQLite / PostgreSQL) |
-| **Alembic** | Schema migrations |
-| **psycopg2-binary** | PostgreSQL driver (Python &lt; 3.14) |
-| **greenlet** | SQLAlchemy async-friendly greenlets |
-| **httpx** | NVD, EPSS, Jira, CMDB, Sonatype, AI HTTP clients |
-| **aiohttp** | Async HTTP (feeds / workers) |
-| **APScheduler** | Timed polling of API feeds and Exchange |
-| **exchangelib** | Microsoft Exchange / Outlook |
-| **smbprotocol** | SMB/CIFS file share (AD/LDAP credentials) |
-| **python-dateutil** | Date parsing |
-| **tenacity** | Retries for NVD / EPSS |
-| **structlog** | Structured logging helpers |
+| **Pydantic** / **pydantic-settings** | Validation and `.env` |
+| **SQLAlchemy 2** / **Alembic** | ORM and migrations |
+| **psycopg2-binary** | PostgreSQL (Python &lt; 3.14) |
+| **httpx** / **aiohttp** | NVD, EPSS, Jira, Monday, AI, inventory APIs |
+| **APScheduler** | Timed polling |
+| **exchangelib** | Exchange / Outlook |
+| **aiosmtplib** | SMTP mail relay |
+| **smbprotocol** | SMB/CIFS |
+| **python-dateutil** / **tenacity** / **structlog** | Dates, NVD/EPSS retries, structured logs |
 | **Celery** + **Redis** | Optional distributed workers |
 | **pytest** / **pytest-asyncio** | Tests |
 
-### Built-in application modules (`app/`)
+### Application packages (`app/`)
 
 | Package | Responsibility |
-|---------|--------------|
-| `app.main` | FastAPI app, HTML routes, lifespan |
-| `app.config` | Environment / `.env` settings |
-| `app.logging_conf` | Logging to stderr and rotating files |
-| `app.db.session` | SQLAlchemy engine and sessions |
-| `app.models` | ORM: CVE, assets, sources, Jira, detections, pipeline |
-| `app.schemas` | API contracts |
-| `app.api` | REST: dashboard, sources, repositories, webhooks, vulnerabilities |
+|---------|----------------|
+| `app.main` | FastAPI app, lifespan |
+| `app.config` | `.env` settings |
+| `app.web` | HTML pages, CSS, JavaScript |
+| `app.api` | REST: dashboard, pipeline queues, inventory, sources, settings, debug |
 | `app.pipeline` | Five-step orchestrator |
-| `app.integrations.nvd` | National Vulnerability Database 2.0 |
-| `app.integrations.epss` | FIRST Exploit Prediction Scoring System |
-| `app.integrations.jira` | Jira Cloud / Server |
-| `app.integrations.exchange` | Exchange mailbox |
-| `app.integrations.cmdb` | CMDB asset lookup |
-| `app.integrations.sonatype` | Sonatype IQ / Nexus |
-| `app.integrations.ai_copilot` | OpenAI-compatible LLM fallback |
-| `app.integrations.siem` | Sigma + KQL / XQL / AQK / EKQL templates |
-| `app.workers.queue` | asyncio queue |
-| `app.workers.scheduler` | APScheduler jobs |
-| `app.workers.celery_app` | Optional Celery app |
-| `app.services` | Ingestion + first-run seed |
-| `app.utils.cve` | CVE regex and CVSS helpers |
-| `app.web` | Templates, CSS, JavaScript |
+| `app.integrations` | NVD, EPSS, ticketing (Jira / Monday / mail / CRM), Exchange, SMB, SMTP, Gmail, SIEM, AI |
+| `app.services` | Ingestion, intel sources, ATOM catalog, mail templates, DB settings |
+| `app.workers` | asyncio queue, APScheduler, optional Celery |
+| `app.models` / `app.schemas` / `app.utils` | ORM, API contracts, CVE regex and intel window |
 
 ---
 
@@ -132,19 +158,22 @@ Requires **Python 3.11+** (3.12 / 3.13 / 3.14 are supported).
 
 ```
 .
-├── app.py                    # Dev launcher: python3 app.py
-├── app/                      # Python package
-├── alembic/                  # DB migrations
-├── systemd/evulntasker.service     # systemd unit template
-├── scripts/                  # Shared install helpers
+├── app.py                      # Dev launcher: python3 app.py
+├── app/                        # Python package
+├── alembic/                    # DB migrations
+├── systemd/evulntasker.service  # systemd unit template
+├── scripts/                    # Install helpers and integration CLIs
 ├── tests/
 ├── requirements.txt
+├── requirements.lock.txt
 ├── .env.example
-├── EVulnTasker-ICON.png            # Brand icon (served as favicon / sidebar)
-├── package_offline.sh       # Build offline ZIP (wheels included)
-├── setup.sh                 # Install / upgrade (default prefix /opt/evulntasker)
-├── uninstall.sh              # Remove install; keep a DB backup
-└── README.md
+├── EVulnTasker-ICON.png
+├── package_offline.sh
+├── setup.sh                    # Install / upgrade (default /opt/evulntasker)
+├── uninstall.sh
+├── README.md
+├── FUNCTIONALITY.md
+└── GAPS.md                     # Remaining work
 ```
 
 Do **not** commit `venv/`, `.env`, `data/`, `logs/`, or `vendor/wheels/`.
@@ -162,15 +191,16 @@ python3 app.py
 
 Then open `http://127.0.0.1:8080`.
 
-Sample webhook (copy the token from **Input Sources**):
+Typical first-run path:
 
-```bash
-curl -X POST http://127.0.0.1:8080/api/webhooks/<token> \
-  -H 'Content-Type: application/json' \
-  -d '{"cve_id":"CVE-2021-44228","summary":"Log4Shell"}'
-```
+1. **Internal systems** — add products or import CSV (`/api/inventory/template.csv`). CMDB / Sonatype / ITNM are optional later teachers, not required for matching.
+2. **Settings → Feeds → Local** — folder on this server. Enable the feed on **Input Sources**, then Sync now (or drop a `.txt` with `CVE-YYYY-NNNNN`).
+3. **Settings → Enrichment** — Enable only if NVD/EPSS should run; turn lookup sources on under **Internet intel**.
+4. **Settings → AI modules** — Disable if the organization must not call an LLM.
+5. **Settings → Ticketing** — Enable Jira / Monday / Email / CRM as needed. Edit **Message** templates.
+6. Watch **Extraction → Incoming CVEs → Status → Actions**.
 
-Health check: `GET /healthz`
+Health: `GET /healthz`.
 
 ---
 
@@ -206,6 +236,14 @@ sudo ./setup.sh --offline --upgrade
 
 Schema changes are applied additively (`create_all` / Alembic). Existing rows are not wiped. A DB backup is taken first.
 
+After changing Python under `app/`, restart:
+
+```bash
+sudo systemctl restart evulntasker
+```
+
+Static JS/CSS is cache-busted; use a hard refresh (Ctrl+Shift+R) after UI changes.
+
 ### Service
 
 ```bash
@@ -222,24 +260,41 @@ sudo journalctl -u evulntasker -f
 sudo ./uninstall.sh --yes
 ```
 
-Removes the application and the `evulntasker` unit. A copy of the database is left under `/var/backups/evulntasker`.
+Removes the application and the `evulntasker` unit (also stops leftover `vaict` / `vulnintel` units if present). A copy of the database — including the Internal systems catalog — is left under `/var/backups/evulntasker`. `.env` secrets (including `GMAIL_APP_PASSWORD`) are wiped and are not in that backup.
 
 ---
 
+## Remaining work
+
+See [`GAPS.md`](GAPS.md). Highest priority: login if the port is exposed beyond a lab.
+
 ## Configuration
 
-Copy `.env.example` to `.env`. Variables include:
+Copy `.env.example` to `.env`. Most operator knobs are also saved from Settings. Runtime keys use `EVULNTASKER_*`; `VULNINTEL_*` from older installs is still read.
 
 | Variable | Purpose |
 |----------|---------|
-| `VULNINTEL_ENV` | `development` / `staging` / `production` |
-| `VULNINTEL_HOST` / `VULNINTEL_PORT` | Bind address (default `0.0.0.0:8080`) |
-| `VULNINTEL_DATABASE_URL` | SQLite or `postgresql+psycopg2://…` |
+| `EVULNTASKER_ENV` | `development` / `staging` / `production` |
+| `EVULNTASKER_HOST` / `EVULNTASKER_PORT` | Bind address (default `0.0.0.0:8080`) |
+| `EVULNTASKER_DATABASE_URL` | SQLite or `postgresql+psycopg2://…` |
+| `ENRICHMENT_ENABLED` | Off = skip NVD/EPSS and AI rewrite; still match and act |
+| `INTEL_START_DATE` | Skip ingest for CVEs before this date (YYYY-MM-DD). Applies to Local, SMB, mail, ATOM, inline, webhooks, and Debugger |
+| `NVD_ENABLED` / `EPSS_ENABLED` | Lookup switches (also per-row Enable lookup in the GUI) |
 | `NVD_API_KEY` | Optional; raises NVD rate limits |
-| `JIRA_*` | Jira project for owners and hunting |
-| `EXCHANGE_*` | Mailbox listener |
-| `CMDB_*` / `SONATYPE_*` | Asset matching |
-| `AI_API_KEY` / `AI_MODEL` | OpenAI-compatible copilot |
+| `AI_ENABLED` | Global LLM gate |
+| `AI_PROVIDER` | `gemini` / `chatgpt` / `azure_openai` / `github_copilot` |
+| `AI_ENRICHMENT_MODE` | `direct` (EVulnTasker AI) or `org_llm` |
+| `AI_API_KEY` / `AI_API_BASE` / `AI_MODEL` | Selected provider |
+| `TICKETING_JIRA_ENABLED` / `_MONDAY_` / `_EMAIL_` / `_CUSTOM_` | Per-provider Enable |
+| `SMTP_RELAY_*` | Settings → Ticketing → Email |
+| `TICKETING_HUNT_EMAIL` | Permanent hunt mailbox (blank = skip) |
+| `TICKETING_FALLBACK_OWNER_EMAIL` | Only if the matched system has no `owner_email` |
+| `JIRA_*` / `MONDAY_*` / `CUSTOM_*` | Provider endpoints and projects |
+| `EXCHANGE_*` | Outlook ingest (also stored on the Outlook source) |
+| `CMDB_*` / `SONATYPE_*` / `ITNM_*` | Inventory teachers: sample the network and insert new equipment into Internal systems. Not used per CVE |
+| `INVENTORY_SYNC_ENABLED` / `INVENTORY_SYNC_SECONDS` | Periodic catalog sampling (default off; interval 24 hours). Independent of the CVE pipeline |
+| `GMAIL_*` | Optional Act HTML mail (not on the Settings form) |
+| `CELERY_BROKER_URL` | Optional; default worker is in-process |
 
 ---
 
@@ -249,6 +304,8 @@ Copy `.env.example` to `.env`. Variables include:
 source venv/bin/activate
 pytest
 ```
+
+On a host whose system Python cannot import the venv wheels (for example 3.14 vs 3.12), run pytest with that venv’s interpreter.
 
 ---
 

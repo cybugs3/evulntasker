@@ -201,7 +201,7 @@ def test_take_action_continues_when_gmail_send_fails(monkeypatch):
         async def create_issue(self, **kwargs):
             return {"key": "VULN-1", "url": "https://jira.example/VULN-1", "dry_run": True, "raw": {}}
 
-    monkeypatch.setattr("app.pipeline.step5_act.get_ticketing_client", lambda _s: FakeTicketing())
+    monkeypatch.setattr("app.pipeline.step5_act.get_ticketing_clients", lambda _s: [("jira", FakeTicketing())])
     monkeypatch.setattr(
         "app.pipeline.step5_act.ExchangeClient",
         lambda: SimpleNamespace(send=lambda **_k: None),

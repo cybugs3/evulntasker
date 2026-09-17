@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Dashboard{% endblock %} · {{ app_name }} {{ version_label }}</title>
   <link rel="icon" type="image/png" href="/static/img/evulntasker-icon.png" />
-  <link rel="stylesheet" href="/static/css/app.css?v={{ version }}-topbar1" />
+    <link rel="stylesheet" href="/static/css/app.css?v={{ version }}-selectdel1" />
 </head>
 {% set path = request.url.path if request is defined else '' %}
 {% set nav = active|default('') %}
@@ -53,6 +53,12 @@
       <a class="nav-item {% if nav == 'dashboard' or path == '/' %}is-active{% endif %}" href="/" title="Main">
         <span class="nav-icon">◈</span><span class="nav-label">Main</span>
       </a>
+      <a class="nav-item {% if nav == 'trends' or path.startswith('/trends') %}is-active{% endif %}" href="/trends" title="Trends">
+        <span class="nav-icon">▤</span><span class="nav-label">Trends</span>
+      </a>
+      <a class="nav-item {% if nav == 'workflow' or path.startswith('/workflow') %}is-active{% endif %}" href="/workflow" title="Live Workflow">
+        <span class="nav-icon">◍</span><span class="nav-label">Live Workflow</span>
+      </a>
       <a class="nav-item {% if nav == 'status' or path.startswith('/status') %}is-active{% endif %}" href="/status" title="Status">
         <span class="nav-icon">◉</span><span class="nav-label">Status</span>
       </a>
@@ -77,12 +83,6 @@
       <a class="nav-item {% if nav == 'actions' or path.startswith('/actions') %}is-active{% endif %}" href="/actions" title="Actions">
         <span class="nav-icon">✓</span><span class="nav-label">Actions</span>
       </a>
-      <a class="nav-item {% if nav == 'tracker' or path.startswith('/tracker') %}is-active{% endif %}" href="/tracker" title="CVE Tracker">
-        <span class="nav-icon">◎</span><span class="nav-label">CVE Tracker</span>
-      </a>
-      <a class="nav-item {% if nav == 'repositories' or path.startswith('/repositories') %}is-active{% endif %}" href="/repositories" title="Repositories">
-        <span class="nav-icon">▣</span><span class="nav-label">Repositories</span>
-      </a>
       <a class="nav-item {% if nav == 'settings' or path.startswith('/settings') %}is-active{% endif %}" href="/settings" title="Settings">
         <span class="nav-icon">⚙</span><span class="nav-label">Settings</span>
       </a>
@@ -99,6 +99,12 @@
       <div class="nav-group">Overview Dashboards</div>
       <a class="nav-item {% if nav == 'dashboard' or path == '/' %}is-active{% endif %}" href="/">
         <span class="nav-icon">◈</span> <span class="nav-label">Main</span>
+      </a>
+      <a class="nav-item {% if nav == 'trends' or path.startswith('/trends') %}is-active{% endif %}" href="/trends">
+        <span class="nav-icon">▤</span> <span class="nav-label">Trends</span>
+      </a>
+      <a class="nav-item {% if nav == 'workflow' or path.startswith('/workflow') %}is-active{% endif %}" href="/workflow">
+        <span class="nav-icon">◍</span> <span class="nav-label">Live Workflow</span>
       </a>
       <a class="nav-item {% if nav == 'status' or path.startswith('/status') %}is-active{% endif %}" href="/status">
         <span class="nav-icon">◉</span> <span class="nav-label">Status</span>
@@ -125,13 +131,6 @@
       </a>
       <a class="nav-item {% if nav == 'actions' or path.startswith('/actions') %}is-active{% endif %}" href="/actions">
         <span class="nav-icon">✓</span> <span class="nav-label">Actions</span>
-      </a>
-      <div class="nav-group">Catalog</div>
-      <a class="nav-item {% if nav == 'tracker' or path.startswith('/tracker') %}is-active{% endif %}" href="/tracker">
-        <span class="nav-icon">◎</span> <span class="nav-label">CVE Tracker</span>
-      </a>
-      <a class="nav-item {% if nav == 'repositories' or path.startswith('/repositories') %}is-active{% endif %}" href="/repositories">
-        <span class="nav-icon">▣</span> <span class="nav-label">Repositories</span>
       </a>
       <div class="nav-group">System</div>
       <a class="nav-item {% if nav == 'debug' or path.startswith('/debug') %}is-active{% endif %}" href="/debug">
@@ -168,7 +167,7 @@
     </main>
   </div>
   </div>
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v={{ version }}-selectdel1"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

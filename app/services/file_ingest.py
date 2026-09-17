@@ -61,7 +61,13 @@ def local_folder(raw: str | None) -> Path:
     return folder
 
 
-def ingest_text(db: Session, source: InputSource, text: str, filename: str = "") -> int:
+def ingest_text(
+    db: Session,
+    source: InputSource,
+    text: str,
+    filename: str = "",
+    extra: dict | None = None,
+) -> int:
     records = parse_intel(text, filename=filename)
     cves = list(dict.fromkeys([rec.cve_id for rec in records] + extract_cves(text)))
     if not cves:
@@ -81,6 +87,9 @@ def ingest_text(db: Session, source: InputSource, text: str, filename: str = "")
             for cve in cves
         ],
     }
+    for key, value in (extra or {}).items():
+        if value not in (None, ""):
+            payload[key] = value
     event = ingest_payload(db, source, payload=payload, raw_text=text)
     return 1 if event else 0
 

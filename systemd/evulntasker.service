@@ -9,7 +9,7 @@ User=evulntasker
 Group=evulntasker
 WorkingDirectory=/opt/evulntasker
 Environment=PYTHONPATH=/opt/evulntasker
-Environment=VULNINTEL_ENV=production
+Environment=EVULNTASKER_ENV=production
 EnvironmentFile=-/opt/evulntasker/.env
 ExecStart=/opt/evulntasker/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --log-level info
 Restart=on-failure

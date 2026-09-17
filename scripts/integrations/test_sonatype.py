@@ -27,8 +27,10 @@ async def main() -> int:
     except Exception as exc:
         print(f"Probe failed: {exc}", file=sys.stderr)
         return 1
-    rows = await SonatypeClient().find("apache", "log4j")
-    print(f"Sample lookup returned {len(rows)} row(s)")
+    rows = SonatypeClient().harvest_catalog()
+    print(f"Catalog harvest returned {len(rows)} row(s)")
+    for row in rows[:8]:
+        print(f"  {row.get('product_type')}: {row.get('vendor')} / {row.get('product')} {row.get('version')}")
     return 0
 
 

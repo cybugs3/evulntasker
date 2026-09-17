@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -10,14 +11,23 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.session import get_db
-from app.models.asset import AssetMatch
 from app.models.detection import DetectionArtifact
 from app.models.enums import PipelineStatus
 from app.models.jira import JiraTicket
 from app.models.pipeline import IngestEvent
 from app.models.vulnerability import Vulnerability
 from app.services.ingestion import queued_cves_for_event
-from app.utils.intel_window import allow_cve
+from app.services.workflow import (
+    _has_intel,
+    classify_vulnerabilities,
+    count_workflow_states,
+    reached_actions,
+    reached_enrichment,
+    reached_matching,
+    workflow_flags,
+)
+
+_ROW_LIMIT = 250
 
 router = APIRouter()
 
@@ -53,25 +63,15 @@ def _status(vuln: Vulnerability) -> str:
     return _LEGACY.get(raw, (raw or "INGESTED").upper())
 
 
-def _in_status(vuln: Vulnerability, *wanted: str) -> bool:
-    return _status(vuln) in wanted
-
-
-def _has_intel(vuln: Vulnerability) -> bool:
-    """True when NVD or EPSS actually returned data — not merely that the enrich step ran."""
-    if getattr(vuln, "cvss_score", None) is not None:
-        return True
-    if getattr(vuln, "epss_score", None) is not None:
-        return True
-    blob = getattr(vuln, "enrichment", None) or {}
-    return isinstance(blob, dict) and bool(blob.get("nvd") or blob.get("epss"))
-
-
 def _source_name(vuln: Vulnerability) -> str:
     return getattr(vuln, "source_name", None) or "—"
 
 
-def _vuln_row(vuln: Vulnerability, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+def _vuln_row(
+    vuln: Vulnerability,
+    extra: dict[str, Any] | None = None,
+    progress: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     row = {
         "cve_id": vuln.cve_id,
         "source": _source_name(vuln),
@@ -88,6 +88,8 @@ def _vuln_row(vuln: Vulnerability, extra: dict[str, Any] | None = None) -> dict[
         "updated_at": _iso(getattr(vuln, "updated_at", None)),
         "href": f"/vulnerabilities/{vuln.cve_id}",
     }
+    if progress:
+        row.update(workflow_flags(progress))
     if extra:
         row.update(extra)
     return row
@@ -103,15 +105,23 @@ _TICKETING_LABELS = {
 
 def _ticketing_meta() -> dict[str, Any]:
     from app.config import get_settings
-    from app.integrations.ticketing import get_ticketing_client
+    from app.integrations.ticketing import get_ticketing_clients
 
     cfg = get_settings()
-    provider = (cfg.ticketing_provider or "jira").lower()
-    label = _TICKETING_LABELS.get(provider, "ticketing")
-    connected = False
-    if cfg.ticketing_enabled:
-        connected = bool(getattr(get_ticketing_client(cfg), "configured", False))
-    return {"connected": connected, "provider": provider, "provider_label": label}
+    clients = get_ticketing_clients(cfg)
+    connected_names = [name for name, client in clients if getattr(client, "configured", False)]
+    if connected_names:
+        label = " + ".join(_TICKETING_LABELS.get(name, name) for name in connected_names)
+    elif clients:
+        label = " + ".join(_TICKETING_LABELS.get(name, name) for name, _client in clients)
+    else:
+        label = "ticketing"
+    return {
+        "connected": bool(connected_names),
+        "provider": connected_names[0] if connected_names else (clients[0][0] if clients else ""),
+        "providers": [name for name, _client in clients],
+        "provider_label": label,
+    }
 
 
 def _action_status(owner, hunt, ticketing: dict[str, Any]) -> dict[str, str]:
@@ -135,6 +145,16 @@ def _action_status(owner, hunt, ticketing: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _ticket_obj(payload: dict[str, Any]) -> SimpleNamespace:
+    return SimpleNamespace(
+        assignee=payload.get("assignee") or "",
+        ticket_key=payload.get("key") or "",
+        url=payload.get("url") or "",
+        dry_run=bool(payload.get("dry_run")),
+        ticket_type=payload.get("type") or "",
+    )
+
+
 @router.get("/pipeline/extraction")
 def extraction_queue(db: Session = Depends(get_db), include_rows: bool = True) -> dict[str, Any]:
     global _cleaned_ingest_noise
@@ -144,10 +164,8 @@ def extraction_queue(db: Session = Depends(get_db), include_rows: bool = True) -
         cleanup_input_sources(db)
         db.commit()
         _cleaned_ingest_noise = True
-    vulns = db.query(Vulnerability).order_by(Vulnerability.updated_at.desc()).limit(250).all()
-    extracted = [v for v in vulns if _in_status(v, "INGESTED", "EXTRACTED") and allow_cve(v.cve_id)]
-    failed = [v for v in vulns if _in_status(v, "FAILED") and allow_cve(v.cve_id)]
-    ai_used = sum(1 for v in extracted if getattr(v, "ai_extraction_used", False))
+    classified = classify_vulnerabilities(db)
+    counts = count_workflow_states(classified)
     event_rows = []
     duplicates = 0
     event_rows_n = 0
@@ -155,25 +173,30 @@ def extraction_queue(db: Session = Depends(get_db), include_rows: bool = True) -
         events = (
             db.query(IngestEvent)
             .options(joinedload(IngestEvent.source))
-            .order_by(IngestEvent.received_at.desc())
+            .order_by(IngestEvent.received_at.desc(), IngestEvent.id.desc())
             .limit(500)
             .all()
         )
-        seen_cves: set[str] = set()
+        seen_files: set[tuple[int, str]] = set()
         for event in events:
-            cves = [cve for cve in queued_cves_for_event(event) if allow_cve(cve) and cve not in seen_cves]
-            if not cves:
+            payload = event.payload if isinstance(getattr(event, "payload", None), dict) else {}
+            filename = str(payload.get("filename") or "").strip()
+            cves = queued_cves_for_event(event)
+            if not cves and not filename:
                 continue
-            seen_cves.update(cves)
+            if filename:
+                file_key = (event.source_id, filename.lower())
+                if file_key in seen_files:
+                    continue
+                seen_files.add(file_key)
             if (event.status or "").lower() in {"duplicate", "skipped"}:
                 duplicates += 1
             source = event.source
-            payload = event.payload if isinstance(getattr(event, "payload", None), dict) else {}
             event_rows.append(
                 {
                     "id": event.id,
                     "source": source.name if source else "—",
-                    "filename": payload.get("filename") or "",
+                    "filename": filename,
                     "cves": cves,
                     "status": event.status or "queued",
                     "error": getattr(event, "error", None),
@@ -194,63 +217,65 @@ def extraction_queue(db: Session = Depends(get_db), include_rows: bool = True) -
     payload = {
         "kpis": {
             "events": len(event_rows) if include_rows else int(event_rows_n),
-            "cves": len(extracted),
-            "ai_fallback": ai_used,
-            "failed": len(failed),
+            "cves": counts["cves"],
+            "ai_fallback": counts["ai_extract"],
+            "failed": counts["failed"],
             "duplicates": duplicates,
         },
     }
     if include_rows:
         payload["events"] = event_rows
-        payload["rows"] = [_vuln_row(v) for v in extracted + failed[:40]]
+        payload["rows"] = [
+            _vuln_row(item["vuln"], progress=item["progress"]) for item in classified[:_ROW_LIMIT]
+        ]
     return payload
 
 
 @router.get("/pipeline/enrichment")
 def enrichment_queue(db: Session = Depends(get_db), include_rows: bool = True) -> dict[str, Any]:
-    vulns = db.query(Vulnerability).order_by(Vulnerability.updated_at.desc()).limit(250).all()
-    in_window = [v for v in vulns if allow_cve(v.cve_id)]
-    pending = [v for v in in_window if _in_status(v, "INGESTED", "EXTRACTED")]
-    enriched = [v for v in in_window if _has_intel(v)]
-    ai_rows = [v for v in in_window if getattr(v, "ai_enrichment_used", False)]
-    incomplete = [
-        v
-        for v in in_window
-        if _in_status(v, "EXTRACTED", "ENRICHED")
-        and (not _has_intel(v) or not v.vendor or not v.product or v.cvss_score is None)
-    ]
-    shown: list[Vulnerability] = []
-    seen: set[int] = set()
-    for vuln in pending + [v for v in in_window if _in_status(v, "ENRICHED")]:
-        if vuln.id in seen:
-            continue
-        seen.add(vuln.id)
-        shown.append(vuln)
+    classified = classify_vulnerabilities(db)
+    counts = count_workflow_states(classified)
     rows = []
     if include_rows:
-        for vuln in shown:
+        shown = [item for item in classified if reached_enrichment(item["progress"])][:_ROW_LIMIT]
+        for item in shown:
+            vuln = item["vuln"]
+            progress = item["progress"]
+            blob = getattr(vuln, "enrichment", None) or {}
+            skipped = isinstance(blob, dict) and bool(blob.get("skipped"))
+            waiting = bool(progress.get("waiting"))
             missing = [
                 name
                 for name, ok in (("vendor", vuln.vendor), ("product", vuln.product), ("cvss", vuln.cvss_score))
                 if not ok
             ]
+            if waiting and isinstance(blob, dict) and blob.get("missing"):
+                missing = list(blob.get("missing") or missing)
             rows.append(
                 _vuln_row(
                     vuln,
                     {
                         "missing": missing,
-                        "nvd": bool((getattr(vuln, "enrichment", None) or {}).get("nvd")) or vuln.cvss_score is not None,
+                        "nvd": bool((blob if isinstance(blob, dict) else {}).get("nvd"))
+                        or vuln.cvss_score is not None,
                         "epss_ok": vuln.epss_score is not None,
                         "intel": _has_intel(vuln),
+                        "skipped": skipped,
+                        "waiting": waiting,
+                        "wait_reason": (blob.get("wait_reason") if isinstance(blob, dict) else None),
+                        "wait_kind": (blob.get("wait_kind") if isinstance(blob, dict) else None),
+                        "retry_at": (blob.get("retry_at") if isinstance(blob, dict) else None),
                     },
+                    progress=progress,
                 )
             )
     return {
         "kpis": {
-            "pending": len(pending),
-            "enriched": len(enriched),
-            "ai_fallback": len(ai_rows),
-            "incomplete": len(incomplete),
+            "pending": counts["waiting"],
+            "enriched": counts["enriched"],
+            "ai_fallback": counts["ai_enrich"],
+            "incomplete": counts["incomplete"],
+            "waiting": counts["waiting"],
         },
         "rows": rows,
     }
@@ -258,63 +283,35 @@ def enrichment_queue(db: Session = Depends(get_db), include_rows: bool = True) -
 
 @router.get("/pipeline/matching")
 def matching_queue(db: Session = Depends(get_db), include_rows: bool = True) -> dict[str, Any]:
-    query = db.query(Vulnerability).order_by(Vulnerability.updated_at.desc()).limit(250)
-    if include_rows:
-        query = query.options(joinedload(Vulnerability.matches).joinedload(AssetMatch.asset))
-    vulns = query.all()
-    waiting = [v for v in vulns if _in_status(v, "ENRICHED", "AI_FALLBACK")]
-    if include_rows:
-        matched = [v for v in vulns if _in_status(v, "MATCHED", "ACTIONED") or v.matches]
-        unmatched = [v for v in waiting if not v.matches]
-    else:
-        matched_ids = {
-            row[0]
-            for row in db.query(AssetMatch.vulnerability_id)
-            .filter(AssetMatch.vulnerability_id.in_([v.id for v in vulns] or [0]))
-            .distinct()
-            .all()
-        }
-        matched = [v for v in vulns if _in_status(v, "MATCHED", "ACTIONED") or v.id in matched_ids]
-        unmatched = [v for v in waiting if v.id not in matched_ids]
-    ai_rows = [v for v in vulns if getattr(v, "ai_matching_used", False)]
+    classified = classify_vulnerabilities(db)
+    counts = count_workflow_states(classified)
     rows = []
     if include_rows:
-        seen: set[int] = set()
-        for vuln in waiting + matched:
-            if vuln.id in seen:
-                continue
-            seen.add(vuln.id)
-            assets = []
-            for match in vuln.matches or []:
-                asset = match.asset
-                assets.append(
-                    {
-                        "name": asset.name if asset else "",
-                        "owner": asset.owner_email if asset else "",
-                        "team": asset.team if asset else "",
-                        "method": match.method,
-                        "confidence": match.confidence,
-                    }
-                )
+        shown = [item for item in classified if reached_matching(item["progress"])][:_ROW_LIMIT]
+        for item in shown:
+            vuln = item["vuln"]
+            progress = item["progress"]
+            assets = item["matches"]
             first = assets[0] if assets else {}
             rows.append(
                 _vuln_row(
                     vuln,
                     {
                         "asset": first.get("name") or "Unmatched",
-                        "owner": first.get("owner") or "",
+                        "owner": first.get("owner_email") or "",
                         "team": first.get("team") or "",
                         "method": first.get("method") or "",
                         "match_count": len(assets),
                     },
+                    progress=progress,
                 )
             )
     return {
         "kpis": {
-            "waiting": len(waiting),
-            "matched": len(matched),
-            "unmatched": len(unmatched),
-            "ai_fallback": len(ai_rows),
+            "waiting": counts["matching_live"],
+            "matched": counts["matched"],
+            "unmatched": counts["unmatched"],
+            "ai_fallback": counts["ai_match"],
         },
         "rows": rows,
     }
@@ -322,14 +319,10 @@ def matching_queue(db: Session = Depends(get_db), include_rows: bool = True) -> 
 
 @router.get("/pipeline/actions")
 def actions_queue(db: Session = Depends(get_db), include_rows: bool = True) -> dict[str, Any]:
-    query = db.query(Vulnerability).order_by(Vulnerability.updated_at.desc()).limit(250)
-    if include_rows:
-        query = query.options(joinedload(Vulnerability.tickets))
-    vulns = query.all()
-    ready = [v for v in vulns if _in_status(v, "MATCHED")]
-    done = [v for v in vulns if _in_status(v, "ACTIONED")]
-    vuln_ids = [v.id for v in vulns] or [0]
-    tickets = db.query(func.count(JiraTicket.id)).filter(JiraTicket.vulnerability_id.in_(vuln_ids)).scalar() or 0
+    classified = classify_vulnerabilities(db)
+    counts = count_workflow_states(classified)
+    action_items = [item for item in classified if reached_actions(item["progress"])]
+    vuln_ids = [item["vuln"].id for item in action_items] or [0]
     hunts = (
         db.query(func.count(JiraTicket.id))
         .filter(
@@ -356,33 +349,32 @@ def actions_queue(db: Session = Depends(get_db), include_rows: bool = True) -> d
     rows = []
     ticketing = _ticketing_meta()
     if include_rows:
-        seen: set[int] = set()
-        for vuln in ready + done:
-            if vuln.id in seen:
-                continue
-            seen.add(vuln.id)
-            owners = [t for t in (vuln.tickets or []) if t.ticket_type == "owner"]
-            hunt = next((t for t in (vuln.tickets or []) if t.ticket_type in {"threat_hunt", "hunt"}), None)
+        for item in action_items[:_ROW_LIMIT]:
+            vuln = item["vuln"]
+            owners = [_ticket_obj(t) for t in item["tickets"] if t.get("type") == "owner"]
+            hunt_row = next((t for t in item["tickets"] if t.get("type") in {"threat_hunt", "hunt"}), None)
+            hunt = _ticket_obj(hunt_row) if hunt_row else None
             owner = owners[0] if owners else None
             rows.append(
                 _vuln_row(
                     vuln,
                     {
                         "owner_ticket": ", ".join((t.assignee or t.ticket_key) for t in owners),
-                        "owner_url": owner.url if len(owners) == 1 else "",
+                        "owner_url": owner.url if owner and len(owners) == 1 else "",
                         "hunt_ticket": (hunt.assignee or hunt.ticket_key) if hunt else "",
                         "hunt_url": hunt.url if hunt else "",
                         "dry_run": all(bool(t.dry_run) for t in owners) if owners else False,
                         "detections": int(detection_counts.get(vuln.id, 0)),
                         **_action_status(owners, hunt, ticketing),
                     },
+                    progress=item["progress"],
                 )
             )
     return {
         "kpis": {
-            "ready": len(ready),
-            "actioned": len(done),
-            "tickets": tickets,
+            "ready": counts["acting_live"],
+            "actioned": counts["actioned"],
+            "tickets": counts["tickets"],
             "hunts": hunts,
             "detections": detections,
         },

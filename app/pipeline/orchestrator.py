@@ -25,7 +25,7 @@ from app.models.vulnerability import Vulnerability
 from app.pipeline.state import fail_vulnerability, pick
 from app.pipeline.step1_ingest import accept_cve, start_event
 from app.pipeline.step2_extract import extract_from_event, finalize_extract
-from app.pipeline.step3_enrich import enrich_cve
+from app.pipeline.step3_enrich import enrich_cve, is_enrichment_waiting
 from app.pipeline.step4_match import match_assets
 from app.pipeline.step5_act import take_action
 
@@ -48,6 +48,8 @@ class PipelineOrchestrator:
         self.db = db
 
     def _ai_enabled(self, source: InputSource | None) -> bool:
+        if not get_settings().ai_configured:
+            return False
         if source is None:
             return True
         return bool(pick(source, "ai_fallback_enabled", "ai_fallback_enabled", default=True))
@@ -90,6 +92,7 @@ class PipelineOrchestrator:
                 return
 
             kept_any = False
+            waiting_any = False
             refresh = bool(
                 isinstance(getattr(event, "payload", None), dict)
                 and (event.payload.get("feed_url") or event.payload.get("_refresh"))
@@ -118,21 +121,31 @@ class PipelineOrchestrator:
                     kept_any = True
                     source_fields = _ingest_fields(event, extracted, cve_id)
                     if outcome == "updated":
-                        self._stamp_run(run, "ingest", f"{cve_id} updated from feed — refreshing enrichment")
-                        await enrich_cve(
-                            self.db, vuln, ai_fallback=ai_fallback, source_fields=source_fields
-                        )
-                        continue
-                    await finalize_extract(self.db, vuln, extracted, cve_id)
+                        self._stamp_run(run, "ingest", f"{cve_id} updated from feed — running enrich/match/act")
+                    else:
+                        await finalize_extract(self.db, vuln, extracted, cve_id)
                     await self._enrich_match_act(
                         run, vuln, ai_fallback=ai_fallback, source_fields=source_fields
                     )
+                    if is_enrichment_waiting(vuln):
+                        waiting_any = True
                 except Exception as exc:
                     log.exception("Pipeline failed for %s", cve_id)
                     fail_vulnerability(self.db, vuln, f"Unrecoverable pipeline error: {exc}", exc)
                     self._stamp_run(run, "failed", f"{cve_id} failed: {exc}")
 
             if not kept_any:
+                payload = event.payload if isinstance(getattr(event, "payload", None), dict) else {}
+                filename = str(payload.get("filename") or "").strip()
+                if filename:
+                    event.status = "skipped"
+                    run.status = "completed"
+                    run.finished_at = datetime.now(timezone.utc)
+                    run.current_step = "complete"
+                    self._stamp_run(run, "ingest", "every CVE was already known")
+                    self.db.commit()
+                    log.info("Kept file ingest event %s — every CVE was already known", event_id)
+                    return
                 self.db.query(PipelineRun).filter(PipelineRun.event_id == event.id).delete()
                 self.db.delete(event)
                 self.db.commit()
@@ -140,9 +153,11 @@ class PipelineOrchestrator:
                 return
 
             event.status = "done"
-            run.status = "completed"
-            run.finished_at = datetime.now(timezone.utc)
-            run.current_step = "complete"
+            run.status = "waiting_enrichment" if waiting_any else "completed"
+            run.finished_at = None if waiting_any else datetime.now(timezone.utc)
+            run.current_step = "enrich" if waiting_any else "complete"
+            if waiting_any:
+                self._stamp_run(run, "enrich", "Pipeline paused — waiting for complete enrichment data")
             self.db.commit()
         except Exception as exc:
             log.exception("Pipeline failed for event %s", event_id)
@@ -170,6 +185,8 @@ class PipelineOrchestrator:
         source_fields: dict | None = None,
     ) -> None:
         """Public hook used by the reprocess API to resume from enrichment."""
+        if not get_settings().ai_configured:
+            ai_fallback = False
         if source_fields is None and run.event_id:
             event = self.db.get(IngestEvent, run.event_id)
             source_fields = _ingest_fields(event, None, vuln.cve_id)
@@ -178,9 +195,23 @@ class PipelineOrchestrator:
         else:
             self._stamp_run(run, "enrich", f"Enrichment disabled — skipping to asset matching for {vuln.cve_id}")
         await enrich_cve(self.db, vuln, ai_fallback=ai_fallback, source_fields=source_fields)
+        if is_enrichment_waiting(vuln):
+            self._stamp_run(
+                run,
+                "enrich",
+                f"{vuln.cve_id} waiting for complete enrichment — match and tickets paused",
+            )
+            return
 
         self._stamp_run(run, "match", f"Matching {vuln.cve_id} against organizational assets")
-        await match_assets(self.db, vuln, ai_fallback=ai_fallback)
+        matches = await match_assets(self.db, vuln, ai_fallback=ai_fallback)
+        if not matches:
+            self._stamp_run(
+                run,
+                "match",
+                f"{vuln.cve_id} unmatched — Actions skipped until an Internal systems match exists",
+            )
+            return
 
         self._stamp_run(run, "act", f"Opening Jira tasks and notifying owners for {vuln.cve_id}")
         await take_action(self.db, vuln)

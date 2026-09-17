@@ -1,15 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Actions{% endblock %}
 {% block heading %}Actions{% endblock %}
-{% block lede %}Open owner and threat-hunting tickets, generate Sigma/SIEM detections, and notify owners. Configure Jira, Monday.com, email (SMTP mail relay), or an internal CRM in Settings.{% endblock %}
+{% block lede %}Tickets and detections for CVEs that matched Internal systems. Unmatched CVEs stay on Asset matching.{% endblock %}
 {% block actions %}
   <a class="btn-ghost" href="/settings">Configure ticketing</a>
+  <span class="updated-stamp" id="page-updated">Updated —</span>
 {% endblock %}
 {% block content %}
   <section class="panel">
     <div class="panel-head">
       <h2>Ticketing and detections</h2>
-      <p class="muted" id="ticketing-hint">Owner ticket, hunt ticket, and generated Sigma/KQL/XQL. Action status follows the ticketing system selected in Settings.</p>
+      <p class="muted" id="ticketing-hint">Only matched CVEs appear here. Owner ticket, hunt ticket, and generated Sigma/KQL/XQL follow the ticketing system selected in Settings.</p>
     </div>
     <div class="table-wrap">
       <table class="data">
@@ -39,5 +40,5 @@
   </template>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/stage.js?v={{ version }}-mail" data-stage="actions"></script>
+<script src="/static/js/stage.js?v={{ version }}-waitto1" data-stage="actions"></script>
 {% endblock %}

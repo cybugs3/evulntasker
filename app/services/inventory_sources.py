@@ -61,7 +61,7 @@ INTERNAL_SOURCE_SPECS: list[dict[str, Any]] = [
         "name": "Sonatype",
         "label": "Software composition",
         "role": "libraries",
-        "description": "Application components from Nexus Lifecycle / IQ, synced locally.",
+        "description": "IQ applications and libraries from the latest report per app, synced locally.",
         "asset_origin": "sonatype",
         "match_method": "sonatype",
         "settings_href": "/settings#assets",

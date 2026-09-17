@@ -3,8 +3,10 @@
 {% block heading %}Main{% endblock %}
 {% block lede %}All pipeline KPIs at a glance. Open Status for the live CVE queue.{% endblock %}
 {% block actions %}
+  <a class="btn-ghost" href="/trends">Trends</a>
+  <a class="btn-ghost" href="/workflow">Live Workflow</a>
   <a class="btn-ghost" href="/status">Status</a>
-  <button class="btn-ghost" id="refresh-btn" type="button">Refresh</button>
+  <span class="updated-stamp" id="page-updated">Updated —</span>
 {% endblock %}
 {% block content %}
   <section class="setup-banner setup-banner-compact" id="dash-inv-banner" hidden>
@@ -19,7 +21,7 @@
         <div class="kpi-value" data-k="ingested_today">—</div>
       </a>
       <a class="main-tile" href="/enrichment">
-        <div class="kpi-label">Pending enrich</div>
+        <div class="kpi-label">Waiting for intel</div>
         <div class="kpi-value danger" data-k="pending_enrichment">—</div>
       </a>
       <a class="main-tile" href="/matching">
@@ -73,7 +75,7 @@
             <div class="kpi-value ok" data-k="cves">—</div>
           </a>
           <a class="main-metric" href="/extraction">
-            <div class="kpi-label">AI fallback</div>
+            <div class="kpi-label">AI</div>
             <div class="kpi-value" data-k="ai_fallback">—</div>
           </a>
           <a class="main-metric" href="/extraction">
@@ -90,15 +92,15 @@
         </div>
         <div class="main-metrics" id="kpi-enrichment">
           <a class="main-metric" href="/enrichment">
-            <div class="kpi-label">Waiting</div>
-            <div class="kpi-value" data-k="pending">—</div>
+            <div class="kpi-label">Waiting for intel</div>
+            <div class="kpi-value danger" data-k="waiting">—</div>
           </a>
           <a class="main-metric" href="/enrichment">
             <div class="kpi-label">Enriched</div>
             <div class="kpi-value ok" data-k="enriched">—</div>
           </a>
           <a class="main-metric" href="/enrichment">
-            <div class="kpi-label">AI fallback</div>
+            <div class="kpi-label">AI</div>
             <div class="kpi-value" data-k="ai_fallback">—</div>
           </a>
           <a class="main-metric" href="/enrichment">
@@ -152,7 +154,7 @@
             <div class="kpi-value danger" data-k="unmatched">—</div>
           </a>
           <a class="main-metric" href="/matching">
-            <div class="kpi-label">AI ownership</div>
+            <div class="kpi-label">AI</div>
             <div class="kpi-value" data-k="ai_fallback">—</div>
           </a>
         </div>
@@ -186,5 +188,5 @@
   </div>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/dashboard.js?v={{ version }}"></script>
+<script src="/static/js/dashboard.js?v={{ version }}-updated2"></script>
 {% endblock %}

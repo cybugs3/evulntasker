@@ -9,19 +9,20 @@ import sys
 
 import httpx
 import scripts.integrations._bootstrap  # noqa: F401
-from app.config import get_settings
+from app.config import enabled_ticketing_providers, get_settings
 from app.utils.integration_connection import probe_connection
 
 
 async def main() -> int:
     settings = get_settings()
-    provider = (settings.ticketing_provider or "jira").lower()
+    enabled = enabled_ticketing_providers(settings)
+    provider = enabled[0] if enabled else (settings.ticketing_provider or "jira").lower()
     conn = settings.ticketing_connection
-    print(f"Ticketing enabled: {settings.ticketing_enabled}")
-    print(f"Provider: {provider}")
+    print(f"Ticketing providers on: {enabled or '(none)'}")
+    print(f"Testing: {provider}")
     print(f"Base URL: {conn.base_url or '(not configured)'}")
-    if not settings.ticketing_enabled:
-        print("Enable TICKETING_ENABLED in .env first.", file=sys.stderr)
+    if not enabled:
+        print("Enable a ticketing provider in Settings first.", file=sys.stderr)
         return 1
     try:
         if provider == "jira":

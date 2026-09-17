@@ -11,7 +11,8 @@ from sqlalchemy import create_engine, text
 from app.config import get_settings
 
 SQLITE_DEFAULT = "sqlite:///./data/evulntasker.db"
-ENV_KEY = "VULNINTEL_DATABASE_URL"
+ENV_KEY = "EVULNTASKER_DATABASE_URL"
+LEGACY_ENV_KEY = "VULNINTEL_DATABASE_URL"
 DEFAULT_SOCKET = "/var/run/postgresql"
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 
@@ -152,20 +153,26 @@ def write_database_url(url: str) -> None:
     lines: list[str] = []
     if path.is_file():
         lines = path.read_text(encoding="utf-8").splitlines()
-    found = False
+    found_new = False
+    found_legacy = False
     out: list[str] = []
     for line in lines:
         if line.startswith(f"{ENV_KEY}=") or line.startswith(f"#{ENV_KEY}="):
             out.append(f"{ENV_KEY}={url}")
-            found = True
+            found_new = True
+        elif line.startswith(f"{LEGACY_ENV_KEY}=") or line.startswith(f"#{LEGACY_ENV_KEY}="):
+            out.append(f"{LEGACY_ENV_KEY}={url}")
+            found_legacy = True
         else:
             out.append(line)
-    if not found:
+    if not found_new:
         if out and out[-1].strip():
             out.append("")
         out.append(f"{ENV_KEY}={url}")
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
     os.environ[ENV_KEY] = url
+    if found_legacy:
+        os.environ[LEGACY_ENV_KEY] = url
     get_settings.cache_clear()
 
 

@@ -5,6 +5,38 @@ function setInvStatus(id, text) {
 
 let catalogRows = [];
 
+const invSelect = bindSelectDelete({
+  panelId: "inv-catalog-panel",
+  startBtnId: "inv-select-start",
+  cancelBtnId: "inv-select-cancel",
+  okBtnId: "inv-select-ok",
+  selectAllId: "inv-select-all",
+  tbodyId: "inv-catalog",
+  modalId: "inv-select-modal",
+  modalTitleId: "inv-select-modal-title",
+  modalConfirmId: "inv-select-modal-confirm",
+  modalCancelId: "inv-select-modal-cancel",
+  statusId: "inv-select-status",
+  countId: "inv-select-count",
+  normalCols: 10,
+  selectCols: 10,
+  endpoint: "/api/inventory/assets/delete",
+  payload: (ids) => ({ ids: ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0) }),
+  pending: "Deleting selected systems…",
+  titleFor: (n) => (n === 1 ? "This will delete 1 selected system" : `This will delete ${n} selected systems`),
+  done: (result) => `Deleted ${result.deleted || 0} system(s).`,
+  onEnter() {
+    renderCatalog(catalogRows);
+  },
+  onExit() {
+    renderCatalog(catalogRows);
+  },
+  async onDeleted() {
+    resetForm();
+    await loadInventory();
+  },
+});
+
 function formPayload() {
   return {
     vendor: document.getElementById("inv-vendor").value.trim(),
@@ -46,7 +78,8 @@ function renderCatalog(rows) {
   const tbody = document.getElementById("inv-catalog");
   if (!tbody) return;
   if (!rows.length) {
-    setEmptyRow(tbody, 9, "No systems yet. Add a row above or import a CSV.");
+    setEmptyRow(tbody, invSelect.colCount(), "No systems yet. Add a row above or import a CSV.");
+    invSelect.syncUi();
     return;
   }
   tbody.replaceChildren();
@@ -62,8 +95,10 @@ function renderCatalog(rows) {
       updated: fmtTime(r.last_update || r.last_synced_at || r.created_at),
     });
     tr.dataset.id = String(r.id);
+    invSelect.restoreRow(tr, r.id);
     tbody.appendChild(tr);
   });
+  invSelect.syncUi();
 }
 
 function fillInvKpis(kpis) {
@@ -119,6 +154,7 @@ document.getElementById("inv-asset-form").addEventListener("submit", async (ev) 
 document.getElementById("inv-cancel-btn").addEventListener("click", resetForm);
 
 document.getElementById("inv-catalog").addEventListener("click", (ev) => {
+  if (invSelect.isSelecting()) return;
   const tr = ev.target.closest("tr[data-id]");
   if (!tr) return;
   if (ev.target.closest("[data-edit]")) {
@@ -155,7 +191,59 @@ document.getElementById("inv-csv-form").addEventListener("submit", async (ev) =>
   }
 });
 
+function csvCell(value) {
+  let text = String(value ?? "");
+  if (text === "—" || text === "null") text = "";
+  if (text && "=+-@".includes(text[0])) text = `'${text}`;
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+function downloadTextFile(text, filename) {
+  const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function catalogToCsv(rows) {
+  const header = "vendor,product,product_type,version,owner_name,owner_email,team,last_update";
+  const lines = (rows || []).map((row) =>
+    [
+      csvCell(row.vendor),
+      csvCell(row.product),
+      csvCell(row.product_type),
+      csvCell(row.version),
+      csvCell(row.owner_name),
+      csvCell(row.owner_email),
+      csvCell(row.team),
+      csvCell(row.last_update || row.last_synced_at || row.created_at || ""),
+    ].join(",")
+  );
+  return [header, ...lines].join("\n");
+}
+
+async function exportCatalog() {
+  try {
+    const response = await fetch("/api/inventory/export.csv");
+    if (response.ok) {
+      downloadTextFile(await response.text(), "systems-database.csv");
+      return;
+    }
+  } catch (_err) {
+    /* fall through to the table already on screen */
+  }
+  downloadTextFile(catalogToCsv(catalogRows), "systems-database.csv");
+}
+
+document.getElementById("inv-export-btn").addEventListener("click", () => {
+  exportCatalog().catch((err) => setInvStatus("inv-csv-status", String(err.message || err)));
+});
+
 loadInventory().catch((err) => {
   const tbody = document.getElementById("inv-catalog");
-  if (tbody) setEmptyRow(tbody, 9, `Failed to load: ${err.message}`);
+  if (tbody) setEmptyRow(tbody, invSelect.colCount(), `Failed to load: ${err.message}`);
 });

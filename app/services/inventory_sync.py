@@ -71,6 +71,19 @@ HEADER_ALIASES: dict[str, tuple[str, ...]] = {
     "external_id": ("external_id", "id", "cmdb_id", "asset_id", "device_id", "ci_id"),
 }
 
+CSV_EXPORT_HEADERS = (
+    "vendor",
+    "product",
+    "product_type",
+    "version",
+    "owner_name",
+    "owner_email",
+    "team",
+    "last_update",
+)
+
+REMOTE_SOURCES = frozenset({"cmdb", "sonatype", "itnm"})
+
 INTERVAL_PRESETS = (
     (300, "5 minutes"),
     (900, "15 minutes"),
@@ -185,14 +198,21 @@ def save_manual_asset(db: Session, payload: dict[str, str], asset: Asset | None 
     return row, created
 
 
-def delete_asset(db: Session, asset_id: int) -> bool:
-    asset = db.query(Asset).filter(Asset.id == asset_id).one_or_none()
-    if asset is None:
-        return False
-    db.query(AssetMatch).filter(AssetMatch.asset_id == asset.id).delete(synchronize_session=False)
-    db.delete(asset)
+def delete_assets(db: Session, asset_ids: list[int]) -> int:
+    ids = sorted({int(item) for item in asset_ids if item is not None})
+    if not ids:
+        return 0
+    existing = [row[0] for row in db.query(Asset.id).filter(Asset.id.in_(ids)).all()]
+    if not existing:
+        return 0
+    db.query(AssetMatch).filter(AssetMatch.asset_id.in_(existing)).delete(synchronize_session=False)
+    deleted = db.query(Asset).filter(Asset.id.in_(existing)).delete(synchronize_session=False)
     db.commit()
-    return True
+    return int(deleted or 0)
+
+
+def delete_asset(db: Session, asset_id: int) -> bool:
+    return delete_assets(db, [asset_id]) > 0
 
 
 def is_placeholder_asset(asset: Asset) -> bool:
@@ -252,9 +272,18 @@ def _find_existing(db: Session, source: str, payload: dict[str, str]) -> Asset |
     return q.one_or_none()
 
 
-def upsert_asset(db: Session, source: str, payload: dict[str, str], now: datetime | None = None) -> tuple[Asset, bool]:
+def upsert_asset(
+    db: Session,
+    source: str,
+    payload: dict[str, str],
+    now: datetime | None = None,
+    *,
+    new_only: bool = False,
+) -> tuple[Asset, bool]:
     now = now or datetime.now(timezone.utc)
     existing = _find_existing(db, source, payload)
+    if existing is not None and new_only:
+        return existing, False
     system_type = payload.get("product_type") or payload.get("system_type") or "application"
     created = existing is None
     asset = existing or Asset(source=source)
@@ -291,11 +320,12 @@ def upsert_rows(db: Session, source: str, rows: Iterable[dict[str, str]]) -> dic
     now = datetime.now(timezone.utc)
     created = 0
     updated = 0
+    new_only = source in REMOTE_SOURCES
     for payload in rows:
-        _, is_new = upsert_asset(db, source, payload, now=now)
+        _, is_new = upsert_asset(db, source, payload, now=now, new_only=new_only)
         if is_new:
             created += 1
-        else:
+        elif not new_only:
             updated += 1
     total = created + updated
     state = get_or_create_state(db, source)
@@ -408,13 +438,31 @@ def sync_sonatype(db: Session) -> dict[str, Any] | None:
     if not conn.configured:
         return None
     try:
-        remotes = fetch_remote_list(conn, "/api/v2/applications")
-        rows = [normalize_remote(item, default_type="library") for item in remotes]
+        from app.integrations.sonatype import SonatypeClient
+
+        rows = SonatypeClient(conn).harvest_catalog()
         result = upsert_rows(db, "sonatype", rows)
         db.commit()
         return {"ok": True, **result}
     except Exception as exc:
         return _record_error(db, "sonatype", exc)
+
+
+def start_sonatype_sync() -> None:
+    """Learn IQ applications + libraries after Settings save. Does not wait."""
+
+    def _run() -> None:
+        from app.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            sync_sonatype(db)
+        except Exception:
+            log.exception("Sonatype catalog sync after save failed")
+        finally:
+            db.close()
+
+    threading.Thread(target=_run, name="sonatype-catalog-sync", daemon=True).start()
 
 
 def sync_itnm(db: Session) -> dict[str, Any] | None:
@@ -478,7 +526,7 @@ def maybe_sync_inventory() -> dict[str, Any] | None:
     settings = get_settings()
     if not settings.inventory_sync_enabled:
         return None
-    interval = max(60, int(settings.inventory_sync_seconds or 1800))
+    interval = max(60, int(settings.inventory_sync_seconds or 86400))
     from app.db.session import SessionLocal
 
     db = SessionLocal()
@@ -530,7 +578,7 @@ def inventory_status(db: Session) -> dict[str, Any]:
         "by_source": by_source,
         "csv_loaded": csv_path.is_file(),
         "sync_enabled": bool(settings.inventory_sync_enabled),
-        "sync_seconds": max(60, int(settings.inventory_sync_seconds or 1800)),
+        "sync_seconds": max(60, int(settings.inventory_sync_seconds or 86400)),
         "interval_presets": [{"seconds": s, "label": label} for s, label in INTERVAL_PRESETS],
         "sources": {
             "csv": {"enabled": True, "configured": csv_path.is_file(), **_state("csv")},
@@ -583,3 +631,31 @@ def catalog_rows(db: Session, limit: int = 250) -> list[dict[str, Any]]:
         }
         for a in assets
     ]
+
+
+def _csv_cell(value: Any) -> str:
+    text = str(value or "")
+    if text[:1] in {"=", "+", "-", "@"}:
+        return f"'{text}"
+    return text
+
+
+def export_catalog_csv(db: Session) -> str:
+    """Dump the Systems database as CSV using the same headers as Import CSV."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(CSV_EXPORT_HEADERS)
+    for row in catalog_rows(db, limit=100_000):
+        writer.writerow(
+            [
+                _csv_cell(row.get("vendor")),
+                _csv_cell(row.get("product")),
+                _csv_cell(row.get("product_type")),
+                _csv_cell(row.get("version")),
+                _csv_cell(row.get("owner_name")),
+                _csv_cell(row.get("owner_email")),
+                _csv_cell(row.get("team")),
+                _csv_cell(row.get("last_update")),
+            ]
+        )
+    return buf.getvalue()

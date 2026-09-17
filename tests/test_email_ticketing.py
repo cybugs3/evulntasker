@@ -1,4 +1,5 @@
 import asyncio
+import smtplib
 from types import SimpleNamespace
 
 from sqlalchemy import create_engine
@@ -256,7 +257,7 @@ def test_open_email_owner_tasks_mails_each_internal_system_owner():
             sent.append(kwargs)
             return {"key": "MAIL-owner", "url": f"mailto:{kwargs['to']}", "dry_run": False, "raw": {}}
 
-    last = asyncio.run(
+    last, issues = asyncio.run(
         _open_email_owner_tasks(
             db,
             vuln,
@@ -268,6 +269,7 @@ def test_open_email_owner_tasks_mails_each_internal_system_owner():
     db.commit()
     db.refresh(vuln)
     assert last is not None
+    assert len(issues) == 2
     assert sorted(row["to"] for row in sent) == ["alice@corp.local", "bob@corp.local"]
     assert {t.assignee for t in vuln.tickets} == {"alice@corp.local", "bob@corp.local"}
 
@@ -315,4 +317,236 @@ def test_smtp_relay_client_not_configured_without_host():
     assert client.configured is False
     result = client.send(to="alice@corp.local", subject="x", body="y")
     assert result["dry_run"] is True
+
+
+def test_smtp_relay_strips_spaces_from_app_password():
+    client = SmtpRelayClient(_settings(smtp_relay_password="abcd efgh ijkl mnop"))
+    assert client.password == "abcdefghijklmnop"
+
+
+def test_smtp_relay_gmail_plain_587_uses_starttls():
+    client = SmtpRelayClient(
+        _settings(
+            smtp_relay_host="smtp.gmail.com",
+            smtp_relay_port=587,
+            smtp_relay_tls_mode="plain",
+        )
+    )
+    assert client.mode == "starttls"
+
+
+def test_smtp_relay_requires_password_when_username_set():
+    client = SmtpRelayClient(
+        _settings(
+            smtp_relay_host="smtp.gmail.com",
+            smtp_relay_port=587,
+            smtp_relay_tls_mode="starttls",
+            smtp_relay_username="evulntasker@gmail.com",
+            smtp_relay_password="",
+        )
+    )
+    try:
+        client.probe()
+    except RuntimeError as exc:
+        assert "no password is stored" in str(exc)
+    else:
+        raise AssertionError("expected missing-password error")
+
+
+def test_smtp_relay_starttls_then_login(monkeypatch):
+    recorded: dict = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            recorded["host"] = host
+            recorded["port"] = port
+            recorded["steps"] = []
+
+        def ehlo(self):
+            recorded["steps"].append("ehlo")
+
+        def starttls(self, context=None):
+            recorded["steps"].append("starttls")
+
+        def login(self, user, password):
+            recorded["steps"].append(("login", user, password))
+
+        def noop(self):
+            return (250, b"ok")
+
+        def quit(self):
+            recorded["steps"].append("quit")
+
+        def close(self):
+            recorded["steps"].append("close")
+
+    monkeypatch.setattr("app.integrations.smtp_relay.smtplib.SMTP", FakeSMTP)
+    client = SmtpRelayClient(
+        _settings(
+            smtp_relay_host="smtp.gmail.com",
+            smtp_relay_port=587,
+            smtp_relay_tls_mode="starttls",
+            smtp_relay_username="evulntasker@gmail.com",
+            smtp_relay_password="abcd efgh ijkl mnop",
+            smtp_relay_from="evulntasker@gmail.com",
+        )
+    )
+    result = client.probe()
+    assert recorded["host"] == "smtp.gmail.com"
+    assert recorded["port"] == 587
+    assert recorded["steps"][0] == "ehlo"
+    assert "starttls" in recorded["steps"]
+    assert ("login", "evulntasker@gmail.com", "abcdefghijklmnop") in recorded["steps"]
+    assert result["ok"] is True
+    assert result["password_set"] is True
+    assert result["username"] == "evulntasker@gmail.com"
+
+
+def test_smtp_relay_auth_error_names_the_login(monkeypatch):
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            pass
+
+        def ehlo(self):
+            return None
+
+        def starttls(self, context=None):
+            return None
+
+        def login(self, user, password):
+            raise smtplib.SMTPAuthenticationError(535, b"BadCredentials")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("app.integrations.smtp_relay.smtplib.SMTP", FakeSMTP)
+    client = SmtpRelayClient(
+        _settings(
+            smtp_relay_host="smtp.gmail.com",
+            smtp_relay_port=587,
+            smtp_relay_tls_mode="starttls",
+            smtp_relay_username="evulntasker@gmail.com",
+            smtp_relay_password="abcdefghijklmnop",
+        )
+    )
+    try:
+        client.probe()
+    except RuntimeError as exc:
+        assert "evulntasker@gmail.com" in str(exc)
+        assert "username and password" in str(exc).lower()
+    else:
+        raise AssertionError("expected a named login error")
+
+
+def test_smtp_test_recipient_prefers_username():
+    client = SmtpRelayClient(
+        _settings(
+            smtp_relay_host="smtp.gmail.com",
+            smtp_relay_username="guy.zwerdling@gmail.com",
+            smtp_relay_from="evulntracker@gmail.com",
+            ticketing_hunt_email="hunt@corp.local",
+        )
+    )
+    assert client.test_recipient() == "guy.zwerdling@gmail.com"
+
+
+def test_smtp_send_test_delivers_message(monkeypatch):
+    recorded: dict = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            recorded["host"] = host
+
+        def ehlo(self):
+            return None
+
+        def starttls(self, context=None):
+            return None
+
+        def login(self, user, password):
+            recorded["login"] = user
+
+        def send_message(self, message, from_addr=None, to_addrs=None):
+            recorded["from"] = message["From"]
+            recorded["to"] = message["To"]
+            recorded["subject"] = message["Subject"]
+            recorded["envelope_from"] = from_addr
+
+        def quit(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("app.integrations.smtp_relay.smtplib.SMTP", FakeSMTP)
+    client = SmtpRelayClient(
+        _settings(
+            smtp_relay_host="smtp.gmail.com",
+            smtp_relay_port=587,
+            smtp_relay_tls_mode="starttls",
+            smtp_relay_username="guy.zwerdling@gmail.com",
+            smtp_relay_password="abcdefghijklmnop",
+            smtp_relay_from="evulntracker@gmail.com",
+        )
+    )
+    result = client.send_test()
+    assert result["sent"] is True
+    assert result["to"] == "guy.zwerdling@gmail.com"
+    assert recorded["from"] == "evulntracker@gmail.com"
+    assert result["from"] == "evulntracker@gmail.com"
+    assert recorded["to"] == "guy.zwerdling@gmail.com"
+    assert recorded["subject"] == "[EVulnTasker] SMTP test"
+
+
+def test_smtp_send_uses_from_address_on_gmail(monkeypatch):
+    recorded: dict = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            return None
+
+        def ehlo(self):
+            return None
+
+        def starttls(self, context=None):
+            return None
+
+        def login(self, user, password):
+            return None
+
+        def send_message(self, message, from_addr=None, to_addrs=None):
+            recorded["header_from"] = message["From"]
+            recorded["envelope_from"] = from_addr
+
+        def quit(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("app.integrations.smtp_relay.smtplib.SMTP", FakeSMTP)
+    client = SmtpRelayClient(
+        _settings(
+            smtp_relay_host="smtp.gmail.com",
+            smtp_relay_port=587,
+            smtp_relay_tls_mode="starttls",
+            smtp_relay_username="guy.zwerdling@gmail.com",
+            smtp_relay_password="abcdefghijklmnop",
+            smtp_relay_from="alerts@corp.local",
+        )
+    )
+    result = client.send(to="owner@corp.local", subject="Owner task", body="body")
+    assert result["from"] == "alerts@corp.local"
+    assert recorded["header_from"] == "alerts@corp.local"
+    assert recorded["envelope_from"] == "guy.zwerdling@gmail.com"
+
+
+def test_smtp_send_test_requires_recipient():
+    client = SmtpRelayClient(_settings(smtp_relay_host="relay.corp.local"))
+    try:
+        client.send_test()
+    except RuntimeError as exc:
+        assert "no mailbox" in str(exc)
+    else:
+        raise AssertionError("expected missing recipient error")
 

@@ -1,6 +1,7 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.settings.common import (
@@ -14,7 +15,7 @@ from app.models.pipeline import IngestEvent
 from app.models.source import InputSource
 from app.models.vulnerability import Vulnerability
 from app.schemas.api import IngestEventOut, SourceCreate, SourceOut, SourceUpdate
-from app.services.ingestion import ingest_payload, new_webhook_token
+from app.services.ingestion import ingest_payload, ingest_inline_cve, InlineIngestError, new_webhook_token
 from app.utils.intel_window import allow_cve
 
 router = APIRouter()
@@ -25,6 +26,11 @@ FEED_TABS = (
     ("outlook", "Outlook"),
     ("web_api", "ATOM feeds"),
 )
+
+
+class InlineCveIn(BaseModel):
+    cve_id: str = Field("", max_length=32)
+    sample_text: str = ""
 
 
 def _normalize_cve(value: Any) -> str | None:
@@ -169,6 +175,26 @@ def list_sources(db: Session = Depends(get_db)) -> list[SourceOut]:
     return out
 
 
+@router.post("/sources/inline")
+def ingest_inline_source(body: InlineCveIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        event = ingest_inline_cve(db, cve_id=body.cve_id or "", sample_text=body.sample_text or "")
+    except InlineIngestError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    cves = list(event.extracted_cves or [])
+    label = ", ".join(str(item) for item in cves) or "CVE"
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    duplicate = (event.status or "").lower() in {"skipped", "duplicate"} or bool(payload.get("_duplicate"))
+    return {
+        "id": event.id,
+        "source_id": event.source_id,
+        "status": event.status,
+        "extracted_cves": cves,
+        "duplicate": duplicate,
+        "message": f"{label} is already in the system." if duplicate else f"Queued {label} through the full pipeline.",
+    }
+
+
 @router.post("/sources", response_model=SourceOut)
 def create_source(body: SourceCreate, db: Session = Depends(get_db)) -> InputSource:
     source = InputSource(**body.model_dump())
@@ -200,6 +226,14 @@ def toggle_source(source_id: int, db: Session = Depends(get_db)) -> InputSource:
     source.enabled = not source.enabled
     if not source.enabled:
         source.last_error = None
+    if source.source_type == "web_api":
+        from app.services.repo_catalog import set_all_atom_feeds_enabled
+
+        set_all_atom_feeds_enabled(db, source.enabled)
+    elif source.source_type in ("local", "smb", "outlook", "inline"):
+        from app.services.repo_catalog import sync_source_repositories
+
+        sync_source_repositories(db, commit=False)
     db.commit()
     db.refresh(source)
     return source

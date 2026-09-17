@@ -76,7 +76,7 @@ def get_settings(db: Session = Depends(get_db)) -> dict[str, Any]:
             "sources": _intel_sources(db),
         },
         "ai": {
-            "enabled": cfg.ai_enabled,
+            "enabled": cfg.ai_configured,
             "provider": cfg.ai_provider,
             "enrichment_mode": cfg.ai_enrichment_mode,
             "api_base": cfg.ai_api_base,

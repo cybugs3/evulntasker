@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.config import Settings
+from app.config import Settings, enabled_ticketing_providers
 from app.integrations.exchange import ExchangeClient
 from app.integrations.smtp_relay import SmtpRelayClient
 
@@ -23,7 +23,7 @@ class EmailTicketingClient:
 
     @property
     def configured(self) -> bool:
-        if not self.settings.ticketing_enabled:
+        if "email" not in enabled_ticketing_providers(self.settings):
             return False
         if self._relay().configured:
             return True

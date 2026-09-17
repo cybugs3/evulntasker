@@ -10,39 +10,73 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
+TICKETING_PROVIDER_NAMES = ("jira", "monday", "email", "custom")
+APP_ENV_PREFIX = "EVULNTASKER"
+LEGACY_ENV_PREFIX = "VULNINTEL"
+
+
+def app_env_choices(suffix: str) -> AliasChoices:
+    """Prefer EVULNTASKER_* and still accept VULNINTEL_* from older .env files."""
+    return AliasChoices(f"{APP_ENV_PREFIX}_{suffix}", f"{LEGACY_ENV_PREFIX}_{suffix}")
+
+
+def enabled_ticketing_providers(settings: Any) -> list[str]:
+    """Providers with their own Enable switch on. Falls back to the old single provider flag."""
+    chosen = [
+        name
+        for name in TICKETING_PROVIDER_NAMES
+        if bool(getattr(settings, f"ticketing_{name}_enabled", False))
+    ]
+    if chosen:
+        return chosen
+    if not bool(getattr(settings, "ticketing_enabled", False)):
+        return []
+    provider = (getattr(settings, "ticketing_provider", None) or "jira").strip().lower()
+    if provider in TICKETING_PROVIDER_NAMES:
+        return [provider]
+    return ["jira"]
 
 
 class Settings(BaseSettings):
-    """Application settings. Environment variables are prefixed with VULNINTEL_
-    except well-known integration names (NVD_*, JIRA_*, etc.)."""
+    """Application settings. Runtime keys use EVULNTASKER_* and still accept
+    VULNINTEL_* from older .env files. Integration names (NVD_*, JIRA_*, …)
+    are unchanged."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
     env: Literal["development", "staging", "production"] = Field(
-        default="development", alias="VULNINTEL_ENV"
+        default="development", validation_alias=app_env_choices("ENV")
     )
-    secret_key: str = Field(default="change-me-in-production", alias="VULNINTEL_SECRET_KEY")
-    host: str = Field(default="0.0.0.0", alias="VULNINTEL_HOST")
-    port: int = Field(default=8080, alias="VULNINTEL_PORT")
-    log_level: str = Field(default="INFO", alias="VULNINTEL_LOG_LEVEL")
-    log_dir: Path = Field(default=Path("./logs"), alias="VULNINTEL_LOG_DIR")
+    secret_key: str = Field(
+        default="change-me-in-production", validation_alias=app_env_choices("SECRET_KEY")
+    )
+    host: str = Field(default="0.0.0.0", validation_alias=app_env_choices("HOST"))
+    port: int = Field(default=8080, validation_alias=app_env_choices("PORT"))
+    log_level: str = Field(default="INFO", validation_alias=app_env_choices("LOG_LEVEL"))
+    log_dir: Path = Field(default=Path("./logs"), validation_alias=app_env_choices("LOG_DIR"))
 
     database_url: str = Field(
-        default="sqlite:///./data/evulntasker.db", alias="VULNINTEL_DATABASE_URL"
+        default="sqlite:///./data/evulntasker.db",
+        validation_alias=app_env_choices("DATABASE_URL"),
     )
 
-    feed_poll_seconds: int = Field(default=300, alias="VULNINTEL_FEED_POLL_SECONDS")
-    email_poll_seconds: int = Field(default=120, alias="VULNINTEL_EMAIL_POLL_SECONDS")
-    worker_poll_seconds: int = Field(default=2, alias="VULNINTEL_WORKER_POLL_SECONDS")
+    feed_poll_seconds: int = Field(default=300, validation_alias=app_env_choices("FEED_POLL_SECONDS"))
+    email_poll_seconds: int = Field(default=120, validation_alias=app_env_choices("EMAIL_POLL_SECONDS"))
+    worker_poll_seconds: int = Field(default=2, validation_alias=app_env_choices("WORKER_POLL_SECONDS"))
+    enrichment_retry_seconds: int = Field(default=120, alias="ENRICHMENT_RETRY_SECONDS")
 
     enrichment_enabled: bool = Field(default=True, alias="ENRICHMENT_ENABLED")
     nvd_api_base: str = Field(
@@ -69,6 +103,10 @@ class Settings(BaseSettings):
 
     ticketing_enabled: bool = Field(default=False, alias="TICKETING_ENABLED")
     ticketing_provider: str = Field(default="jira", alias="TICKETING_PROVIDER")
+    ticketing_jira_enabled: bool = Field(default=False, alias="TICKETING_JIRA_ENABLED")
+    ticketing_monday_enabled: bool = Field(default=False, alias="TICKETING_MONDAY_ENABLED")
+    ticketing_email_enabled: bool = Field(default=False, alias="TICKETING_EMAIL_ENABLED")
+    ticketing_custom_enabled: bool = Field(default=False, alias="TICKETING_CUSTOM_ENABLED")
     ticketing_host: str = Field(default="", alias="TICKETING_HOST")
     ticketing_port: int = Field(default=443, alias="TICKETING_PORT")
     ticketing_use_tls: bool = Field(default=True, alias="TICKETING_USE_TLS")
@@ -118,7 +156,7 @@ class Settings(BaseSettings):
 
     sonatype_enabled: bool = Field(default=False, alias="SONATYPE_ENABLED")
     sonatype_host: str = Field(default="", alias="SONATYPE_HOST")
-    sonatype_port: int = Field(default=443, alias="SONATYPE_PORT")
+    sonatype_port: int = Field(default=8070, alias="SONATYPE_PORT")
     sonatype_use_tls: bool = Field(default=True, alias="SONATYPE_USE_TLS")
     sonatype_ignore_cert: bool = Field(default=False, alias="SONATYPE_IGNORE_CERT")
     sonatype_username: str = Field(default="", alias="SONATYPE_USERNAME")
@@ -139,9 +177,9 @@ class Settings(BaseSettings):
     itnm_list_path: str = Field(default="/devices", alias="ITNM_LIST_PATH")
 
     inventory_sync_enabled: bool = Field(default=False, alias="INVENTORY_SYNC_ENABLED")
-    inventory_sync_seconds: int = Field(default=1800, alias="INVENTORY_SYNC_SECONDS")
+    inventory_sync_seconds: int = Field(default=86400, alias="INVENTORY_SYNC_SECONDS")
 
-    ai_enabled: bool = Field(default=True, alias="AI_ENABLED")
+    ai_enabled: bool = Field(default=False, alias="AI_ENABLED")
     ai_provider: str = Field(default="gemini", alias="AI_PROVIDER")
     ai_enrichment_mode: str = Field(default="direct", alias="AI_ENRICHMENT_MODE")
     ai_api_base: str = Field(
@@ -169,32 +207,37 @@ class Settings(BaseSettings):
 
     @property
     def jira_configured(self) -> bool:
-        if not self.ticketing_enabled:
+        if "jira" not in enabled_ticketing_providers(self):
             return False
-        if (self.ticketing_provider or "jira").lower() != "jira":
-            return self.ticketing_configured
         token = self.jira_api_token or self.ticketing_password
         base = self.ticketing_base_url or self.jira_base_url
         return bool(base and token)
 
     @property
     def ticketing_configured(self) -> bool:
-        if not self.ticketing_enabled:
+        enabled = enabled_ticketing_providers(self)
+        if not enabled:
             return False
-        provider = (self.ticketing_provider or "jira").lower()
-        if provider == "email":
+        if "email" in enabled:
             from app.integrations.smtp_relay import SmtpRelayClient
 
             if SmtpRelayClient(self).configured:
                 return True
             from app.integrations.exchange import ExchangeClient
 
-            return ExchangeClient.from_app().can_send()
-        if provider == "monday":
+            if ExchangeClient.from_app().can_send():
+                return True
+        if "monday" in enabled:
             token = self.ticketing_password or self.jira_api_token
-            return bool(token and self.monday_board_id)
-        conn = self.ticketing_connection
-        return conn.configured and bool(conn.password or conn.username)
+            if token and self.monday_board_id:
+                return True
+        if "jira" in enabled and self.jira_configured:
+            return True
+        if "custom" in enabled:
+            conn = self.ticketing_connection
+            if conn.configured and bool(conn.password or conn.username):
+                return True
+        return False
 
     @property
     def ticketing_base_url(self) -> str:
@@ -257,11 +300,14 @@ class Settings(BaseSettings):
         password = self.ticketing_password or self.jira_api_token
         username = self.ticketing_username or self.jira_user_email
         api_path = ""
+        enabled = enabled_ticketing_providers(self)
         provider = (self.ticketing_provider or "jira").lower()
-        if provider == "custom":
+        if "custom" in enabled and "jira" not in enabled:
+            api_path = self.custom_ticketing_api_path
+        elif not enabled and provider == "custom":
             api_path = self.custom_ticketing_api_path
         return IntegrationConnection(
-            enabled=self.ticketing_enabled,
+            enabled=bool({"jira", "custom"} & set(enabled)),
             host=self.ticketing_host,
             port=self.ticketing_port,
             use_tls=self.ticketing_use_tls,
@@ -286,7 +332,8 @@ class Settings(BaseSettings):
 
     @property
     def ai_configured(self) -> bool:
-        return self.ai_enabled and bool(self.ai_api_key)
+        """True only when the operator turned AI on *and* saved an API key."""
+        return bool(self.ai_enabled) and bool((self.ai_api_key or "").strip())
 
     @property
     def ai_enrichment_direct(self) -> bool:

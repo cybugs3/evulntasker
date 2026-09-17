@@ -99,6 +99,9 @@ def test_ensure_copies_catalog_into_atom_settings(monkeypatch):
     ]
     assert "https://www.cisa.gov/cybersecurity-advisories/all.xml" in urls
     assert source.enabled is False
+    atom_rows = db.query(VulnerabilityRepository).filter(VulnerabilityRepository.feed_type == "atom").all()
+    assert atom_rows
+    assert all(row.enabled is False for row in atom_rows)
     atom_names = {
         row.name
         for row in db.query(VulnerabilityRepository).filter(VulnerabilityRepository.feed_type == "atom")
@@ -191,3 +194,62 @@ def test_duplicate_exploitdb_rows_are_collapsed():
     rows = db.query(VulnerabilityRepository).filter(VulnerabilityRepository.feed_type == "atom").all()
     assert len(rows) == 1
     assert rows[0].name == "Exploit-DB"
+
+
+def test_source_channels_appear_in_repository_catalog():
+    db = _session()
+    db.add(
+        InputSource(
+            name="Local folder",
+            source_type="local",
+            description="",
+            enabled=True,
+            config={"path": "/var/evulntasker/inbox"},
+        )
+    )
+    db.add(
+        InputSource(
+            name="SMB share",
+            source_type="smb",
+            description="",
+            enabled=True,
+            config={
+                "locations": [
+                    {
+                        "name": "Intel drop",
+                        "server": "fileserver",
+                        "share": "intel",
+                        "path": "cves",
+                    }
+                ]
+            },
+        )
+    )
+    db.add(
+        InputSource(
+            name="Outlook / Exchange",
+            source_type="outlook",
+            description="",
+            enabled=False,
+            config={"server": "mail.corp.local", "folder": "Inbox", "email": "soc@corp.local"},
+        )
+    )
+    db.commit()
+    from app.services.repo_catalog import sync_source_repositories
+
+    sync_source_repositories(db)
+    rows = {row.feed_type: row for row in db.query(VulnerabilityRepository).all()}
+    assert rows["local"].endpoint == "/var/evulntasker/inbox"
+    assert rows["local"].enabled is True
+    assert rows["smb"].endpoint == "\\\\fileserver\\intel\\cves"
+    assert rows["smb"].name == "Intel drop"
+    assert rows["outlook"].endpoint == "mail.corp.local · Inbox · soc@corp.local"
+    assert rows["outlook"].enabled is False
+
+    local = db.query(InputSource).filter(InputSource.source_type == "local").one()
+    local.config = {"path": ""}
+    db.commit()
+    sync_source_repositories(db)
+    types = {row.feed_type for row in db.query(VulnerabilityRepository).all()}
+    assert "local" not in types
+    assert "smb" in types

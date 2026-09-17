@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Live Workflow{% endblock %}
+{% block heading %}Live Workflow{% endblock %}
+{% block lede %}Watch CVEs move through Ingest, Extraction, Enrichment, Matching, and Actions — one at a time, slowly enough to follow.{% endblock %}
+{% block actions %}
+  <span class="wf-live-badge" aria-live="polite">
+    <span class="wf-live-dot" aria-hidden="true"></span>
+    Live
+  </span>
+  <span class="updated-stamp" id="page-updated" data-flash="off">Updated —</span>
+{% endblock %}
+{% block content %}
+  <section class="panel inline-cve-bar">
+    <form id="inline-cve-form" class="inline-cve-row">
+      <span class="inline-cve-label">Inline CVE</span>
+      <input class="input mono" id="inline-cve" placeholder="CVE-2024-1234" autocomplete="off" />
+      <button class="btn" type="submit" id="inline-submit">Ingest CVE</button>
+      <p class="muted" id="inline-status"></p>
+    </form>
+  </section>
+
+  <section class="main-hero" id="wf-kpis">
+    <div class="main-tile">
+      <div class="kpi-label">In flight</div>
+      <div class="kpi-value" data-k="inflight">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Waiting for intel</div>
+      <div class="kpi-value" data-k="waiting">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Unmatched</div>
+      <div class="kpi-value" data-k="unmatched">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Completed</div>
+      <div class="kpi-value ok" data-k="completed">—</div>
+    </div>
+  </section>
+
+  <section class="panel wf-board">
+    <div class="wf-hero">
+      <div class="wf-axis">
+        <div class="wf-rail" aria-hidden="true">
+          <div class="wf-rail-line"></div>
+          <div class="wf-rail-fill" id="wf-rail-fill">
+            <div class="wf-rail-flow"></div>
+          </div>
+        </div>
+        <ol class="wf-stops" id="wf-stops"></ol>
+      </div>
+      <div class="wf-stage" id="wf-stage"></div>
+    </div>
+    <p class="muted wf-empty" id="wf-empty" hidden>Listening for the next CVE…</p>
+    <div class="wf-dossier" id="wf-dossier" hidden></div>
+  </section>
+
+  <template id="tpl-wf-stop">
+    <li class="wf-stop">
+      <span class="wf-node">
+        <i class="wf-ping"></i>
+        <span class="wf-core" data-slot="index"></span>
+      </span>
+      <span class="wf-title" data-slot="title"></span>
+      <span class="wf-count muted" data-slot="count"></span>
+    </li>
+  </template>
+  <template id="tpl-wf-chip">
+    <a class="wf-chip">
+      <div class="wf-cve" data-slot="cve"></div>
+      <div class="wf-meta muted" data-slot="meta"></div>
+      <div class="wf-dots" data-slot="dots" aria-hidden="true"></div>
+    </a>
+  </template>
+  <template id="tpl-wf-story">
+    <article class="wf-story">
+      <header class="wf-story-head">
+        <a class="wf-story-cve" data-slot="cve"></a>
+        <span class="pill" data-slot="stage"></span>
+      </header>
+      <div class="wf-story-body" data-slot="body"></div>
+    </article>
+  </template>
+  <template id="tpl-wf-story-block">
+    <section class="wf-story-block">
+      <div class="wf-story-label muted" data-slot="label"></div>
+      <div class="wf-story-value" data-slot="value"></div>
+    </section>
+  </template>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/workflow.js?v={{ version }}-waitto1"></script>
+{% endblock %}

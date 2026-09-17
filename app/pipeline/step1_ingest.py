@@ -19,7 +19,7 @@ from app.models.enums import PipelineStatus
 from app.models.pipeline import IngestEvent
 from app.models.source import InputSource
 from app.models.vulnerability import Vulnerability
-from app.pipeline.state import begin_step, complete_step, write_audit
+from app.pipeline.state import apply_status, begin_step, complete_step, write_audit
 from app.pipeline.step3_enrich import apply_ingested_fields
 from app.services.ingestion import ingest_payload, new_webhook_token
 
@@ -114,12 +114,11 @@ def accept_cve(
         product=product,
         product_type=product_type,
         affected_versions=versions,
-        pipeline_status="ingested",
-        status=PipelineStatus.INGESTED,
         source_name=source.name if source else "unknown",
         ai_extraction_used=ai_used,
         enrichment={"feed_link": link} if link else {},
     )
+    apply_status(vuln, PipelineStatus.INGESTED)
     apply_ingested_fields(vuln, payload)
     db.add(vuln)
     db.commit()

@@ -29,9 +29,11 @@ Usage: ./uninstall.sh [options]
   --yes               Do not ask for confirmation
   -h, --help          Show this help
 
-Stops the service, copies the database aside, then deletes the application,
-virtualenv, systemd unit, logs, and .env (including GMAIL_APP_PASSWORD).
-The database backup is not deleted and does not contain Gmail secrets.
+Stops the service (including leftover vaict / vulnintel units), copies the
+database aside (Incoming CVEs and Internal systems catalog), then deletes the
+application, virtualenv, systemd unit, logs, and .env (including
+GMAIL_APP_PASSWORD). The database backup is not deleted and does not contain
+Gmail secrets. Remaining product work is listed in GAPS.md before uninstall.
 EOF
 }
 
@@ -60,7 +62,8 @@ if [[ -z "$BACKUP_DIR" ]]; then
 fi
 
 echo "This will remove EVulnTasker from: $PREFIX"
-echo "Database backup will be written to: $BACKUP_DIR"
+echo "Database backup (Incoming CVEs + Internal systems catalog) will be written to: $BACKUP_DIR"
+echo "Leftover systemd units named vaict / vulnintel are stopped and removed if present."
 echo "GMAIL_APP_PASSWORD in $PREFIX/.env is deleted with the install and is NOT copied into the DB backup."
 if [[ "$YES" -ne 1 ]]; then
   read -r -p "Continue? [y/N] " ans
@@ -115,7 +118,7 @@ fi
 
 echo
 evulntasker_ok "EVulnTasker has been uninstalled"
-echo "  Database backup: $BACKUP_DIR"
+echo "  Database backup: $BACKUP_DIR (Incoming CVEs and Internal systems catalog)"
 if [[ "$HERE" != "$PREFIX" && -d "$HERE/venv" ]]; then
   evulntasker_warn "Left checkout venv in place: $HERE/venv (not part of $PREFIX)"
   echo "  To drop it:  rm -rf $HERE/venv"

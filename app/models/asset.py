@@ -1,4 +1,8 @@
-"""Organizational assets (CMDB / Sonatype) and CVE-to-asset matches."""
+"""Organizational assets (Internal systems catalog) and CVE-to-asset matches.
+
+CMDB / Sonatype / ITNM teach this catalog on a schedule. Matching reads only
+these local rows — never those APIs per CVE.
+"""
 
 from __future__ import annotations
 

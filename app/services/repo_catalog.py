@@ -1,4 +1,4 @@
-"""Catalog rows on Vulnerability Repositories: intel lookups + operator ATOM feeds."""
+"""Feed catalog rows shown on Input Sources: intel lookups + operator ATOM/local feeds."""
 
 from __future__ import annotations
 
@@ -261,6 +261,7 @@ def ensure_atom_feeds(db: Session, source: InputSource | None = None) -> InputSo
     if changed:
         _write_atom_settings(source, feeds)
     sync_atom_repositories(db, source=source, commit=False)
+    sync_atom_channel_enabled(db, align_legacy=True)
     db.commit()
     db.refresh(source)
     return source
@@ -274,6 +275,7 @@ def restore_default_atom_feeds(db: Session) -> InputSource:
     feeds = _merge_default_atom_feeds(normalize_feeds(source.config or {}))
     _write_atom_settings(source, feeds)
     sync_atom_repositories(db, source=source, commit=False)
+    sync_atom_channel_enabled(db)
     db.commit()
     db.refresh(source)
     return source
@@ -293,8 +295,41 @@ def atom_feed_enabled(db: Session, url: str) -> bool:
         .first()
     )
     if row is None:
-        return True
+        return False
     return bool(row.enabled)
+
+
+def _atom_rows(db: Session) -> list[VulnerabilityRepository]:
+    return (
+        db.query(VulnerabilityRepository)
+        .filter(VulnerabilityRepository.feed_type == ATOM_TYPE)
+        .all()
+    )
+
+
+def sync_atom_channel_enabled(db: Session, *, align_legacy: bool = False) -> None:
+    """web_api.enabled follows per-feed Enable on Vulnerability Repositories.
+
+    align_legacy: if the ATOM channel was off, per-feed Enable was never the
+    poll switch — pause those rows so upgrade does not start polling.
+    """
+    source = atom_source(db)
+    rows = _atom_rows(db)
+    if source is None:
+        return
+    if align_legacy and not source.enabled:
+        for row in rows:
+            if row.enabled:
+                row.enabled = False
+    source.enabled = any(row.enabled for row in rows)
+
+
+def set_all_atom_feeds_enabled(db: Session, enabled: bool) -> None:
+    for row in _atom_rows(db):
+        row.enabled = bool(enabled)
+    source = atom_source(db)
+    if source is not None:
+        source.enabled = bool(enabled) and bool(_atom_rows(db))
 
 
 def sync_atom_repositories(db: Session, source: InputSource | None = None, commit: bool = True) -> None:
@@ -328,7 +363,7 @@ def sync_atom_repositories(db: Session, source: InputSource | None = None, commi
                 name=_unique_name(db, _display_name(feed)),
                 feed_type=ATOM_TYPE,
                 endpoint=url,
-                enabled=True,
+                enabled=False,
                 sync_status="idle",
                 notes="ATOM/RSS ingest feed from Settings → Feeds.",
                 config={"atom_managed": True, "url": url},
@@ -416,3 +451,312 @@ def mark_atom_synced(
     row.last_error = error
     if ingested:
         row.raw_count = int(row.raw_count or 0) + ingested
+
+
+SOURCE_REPO_TYPES = ("local", "smb", "outlook", "inline")
+_TYPE_RANK = {
+    "nvd": 0,
+    "epss": 1,
+    "local": 2,
+    "smb": 3,
+    "outlook": 4,
+    "inline": 5,
+    "atom": 6,
+}
+
+
+def _join_endpoint(*parts: str) -> str:
+    return " · ".join(part for part in parts if part)
+
+
+def _source_status(source: InputSource) -> tuple[str, str | None]:
+    err = (getattr(source, "last_error", None) or "").strip() or None
+    if err:
+        return "error", err
+    if getattr(source, "last_event_at", None):
+        return "ok", None
+    return "idle", None
+
+
+def _source_specs(source: InputSource) -> list[dict[str, Any]]:
+    cfg = source.config if isinstance(source.config, dict) else {}
+    kind = (source.source_type or "").strip().lower()
+    status, error = _source_status(source)
+    base = {
+        "source_id": source.id,
+        "source_type": kind,
+        "enabled": bool(source.enabled),
+        "last_sync_at": getattr(source, "last_event_at", None),
+        "raw_count": int(getattr(source, "event_count", 0) or 0),
+        "sync_status": status,
+        "last_error": error,
+    }
+    if kind == "local":
+        path = str(cfg.get("path") or "").strip()
+        if not path:
+            return []
+        return [
+            {
+                **base,
+                "name": (source.name or "").strip() or "Local folder",
+                "feed_type": "local",
+                "endpoint": path,
+                "location_key": "folder",
+                "notes": "Folder on this EVulnTasker host. Edit in Settings → Feeds → Local folder.",
+            }
+        ]
+    if kind == "smb":
+        from app.integrations.smb import normalize_locations, unc_path
+
+        specs: list[dict[str, Any]] = []
+        for loc in normalize_locations(cfg):
+            endpoint = unc_path(loc["server"], loc["share"], loc.get("path") or "")
+            loc_name = str(loc.get("name") or "").strip()
+            key = f"{loc['server']}|{loc['share']}|{loc.get('path') or ''}".lower()
+            specs.append(
+                {
+                    **base,
+                    "name": loc_name or (source.name or "").strip() or "SMB share",
+                    "feed_type": "smb",
+                    "endpoint": endpoint,
+                    "location_key": key,
+                    "notes": "SMB/CIFS location. Edit in Settings → Feeds → SMB.",
+                }
+            )
+        return specs
+    if kind == "outlook":
+        server = str(cfg.get("server") or "").strip()
+        folder = str(cfg.get("folder") or "").strip() or "Inbox"
+        email = str(cfg.get("email") or "").strip()
+        if not server and not email:
+            return []
+        return [
+            {
+                **base,
+                "name": (source.name or "").strip() or "Outlook / Exchange",
+                "feed_type": "outlook",
+                "endpoint": _join_endpoint(server, folder, email),
+                "location_key": "mailbox",
+                "notes": "On-prem Exchange mailbox. Edit in Settings → Feeds → Outlook / Exchange.",
+            }
+        ]
+    if kind == "inline":
+        return [
+            {
+                **base,
+                "name": (source.name or "").strip() or "Inline CVE",
+                "feed_type": "inline",
+                "endpoint": "Input Sources · Inline CVE",
+                "location_key": "form",
+                "notes": "CVE IDs entered by an operator. Open Input Sources to submit one.",
+            }
+        ]
+    return []
+
+
+def _source_repo_key(row: VulnerabilityRepository) -> tuple[str, str, str] | None:
+    cfg = _cfg(row)
+    if not cfg.get("source_managed"):
+        return None
+    return (
+        str(cfg.get("source_type") or row.feed_type or ""),
+        str(cfg.get("source_id") or ""),
+        str(cfg.get("location_key") or ""),
+    )
+
+
+def sync_source_repositories(db: Session, commit: bool = True) -> None:
+    """Mirror Local / SMB / Exchange / Inline settings onto Vulnerability Repositories."""
+    specs: list[dict[str, Any]] = []
+    sources = (
+        db.query(InputSource)
+        .filter(InputSource.source_type.in_(SOURCE_REPO_TYPES))
+        .order_by(InputSource.id.asc())
+        .all()
+    )
+    for source in sources:
+        specs.extend(_source_specs(source))
+
+    existing = db.query(VulnerabilityRepository).all()
+    by_key: dict[tuple[str, str, str], VulnerabilityRepository] = {}
+    managed: list[VulnerabilityRepository] = []
+    for row in existing:
+        key = _source_repo_key(row)
+        if key is None:
+            continue
+        managed.append(row)
+        by_key[key] = row
+
+    keep: set[tuple[str, str, str]] = set()
+    changed = False
+    for spec in specs:
+        key = (spec["source_type"], str(spec["source_id"]), spec["location_key"])
+        keep.add(key)
+        cfg = {
+            "source_managed": True,
+            "source_type": spec["source_type"],
+            "source_id": spec["source_id"],
+            "location_key": spec["location_key"],
+        }
+        row = by_key.get(key)
+        if row is None:
+            row = VulnerabilityRepository(
+                name=_unique_name(db, spec["name"]),
+                feed_type=spec["feed_type"],
+                endpoint=spec["endpoint"],
+                enabled=spec["enabled"],
+                sync_status=spec["sync_status"],
+                last_sync_at=spec["last_sync_at"],
+                raw_count=spec["raw_count"],
+                last_error=spec["last_error"],
+                notes=spec["notes"],
+                config=cfg,
+            )
+            db.add(row)
+            db.flush()
+            by_key[key] = row
+            changed = True
+            continue
+        desired = spec["name"]
+        if row.name != desired:
+            row.name = _unique_name(db, desired, exclude_id=row.id)
+            changed = True
+        for field in (
+            "feed_type",
+            "endpoint",
+            "enabled",
+            "sync_status",
+            "last_sync_at",
+            "raw_count",
+            "last_error",
+            "notes",
+        ):
+            if getattr(row, field) != spec[field]:
+                setattr(row, field, spec[field])
+                changed = True
+        if _cfg(row) != cfg:
+            row.config = cfg
+            flag_modified(row, "config")
+            changed = True
+
+    for row in managed:
+        key = _source_repo_key(row)
+        if key is not None and key not in keep:
+            db.delete(row)
+            changed = True
+
+    if commit and changed:
+        db.commit()
+
+
+def ranked_repositories(rows: list[VulnerabilityRepository]) -> list[VulnerabilityRepository]:
+    return sorted(rows, key=lambda row: (_TYPE_RANK.get(row.feed_type, 9), row.id or 0))
+
+
+def _norm_cve(value: Any) -> str | None:
+    text = str(value or "").strip().upper()
+    return text if text.startswith("CVE-") else None
+
+
+def _cves_from_event(extracted: Any, payload: Any) -> set[str]:
+    found: set[str] = set()
+    for raw in extracted or []:
+        cve = _norm_cve(raw)
+        if cve:
+            found.add(cve)
+    blob = payload if isinstance(payload, dict) else {}
+    for key in ("cve_id", "cve", "cveId", "cves"):
+        value = blob.get(key)
+        if isinstance(value, list):
+            for item in value:
+                cve = _norm_cve(item)
+                if cve:
+                    found.add(cve)
+        else:
+            cve = _norm_cve(value)
+            if cve:
+                found.add(cve)
+    for rec in blob.get("records") or []:
+        if isinstance(rec, dict):
+            cve = _norm_cve(rec.get("cve_id"))
+            if cve:
+                found.add(cve)
+    return found
+
+
+def _feed_url_key(value: str | None) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
+def repository_cve_counts(db: Session, rows: list[VulnerabilityRepository]) -> dict[int, int]:
+    """Unique CVE records in Incoming CVEs per feed row.
+
+    Ingest channels count stored CVEs seen on that source/URL.
+    NVD / EPSS count records that actually received that lookup during enrichment.
+    """
+    from app.models.pipeline import IngestEvent
+    from app.models.source import InputSource
+    from app.models.vulnerability import Vulnerability
+
+    stored: set[str] = set()
+    by_source_name: dict[str, set[str]] = {}
+    nvd_ids: set[str] = set()
+    epss_ids: set[str] = set()
+    for cve_id, source_name, nvd_at, epss_score, enrichment in db.query(
+        Vulnerability.cve_id,
+        Vulnerability.source_name,
+        Vulnerability.nvd_modified_at,
+        Vulnerability.epss_score,
+        Vulnerability.enrichment,
+    ).all():
+        cve = _norm_cve(cve_id)
+        if not cve:
+            continue
+        stored.add(cve)
+        name = str(source_name or "").strip()
+        if name:
+            by_source_name.setdefault(name, set()).add(cve)
+        blob = enrichment if isinstance(enrichment, dict) else {}
+        if nvd_at is not None or blob.get("nvd"):
+            nvd_ids.add(cve)
+        if epss_score is not None or blob.get("epss"):
+            epss_ids.add(cve)
+
+    by_source_id: dict[int, set[str]] = {}
+    by_feed_url: dict[str, set[str]] = {}
+    for source_id, extracted, payload in db.query(
+        IngestEvent.source_id,
+        IngestEvent.extracted_cves,
+        IngestEvent.payload,
+    ).all():
+        found = _cves_from_event(extracted, payload) & stored
+        if not found:
+            continue
+        by_source_id.setdefault(int(source_id), set()).update(found)
+        blob = payload if isinstance(payload, dict) else {}
+        url = _feed_url_key(blob.get("feed_url"))
+        if url:
+            by_feed_url.setdefault(url, set()).update(found)
+
+    sources = {row.id: row for row in db.query(InputSource).all()}
+    out: dict[int, int] = {}
+    for row in rows:
+        kind = (row.feed_type or "").strip().lower()
+        if kind == "nvd":
+            out[row.id] = len(nvd_ids)
+            continue
+        if kind == "epss":
+            out[row.id] = len(epss_ids)
+            continue
+        found: set[str] = set()
+        if kind == ATOM_TYPE:
+            found |= by_feed_url.get(_feed_url_key(_atom_url(row) or row.endpoint), set())
+        cfg = _cfg(row)
+        source_id = cfg.get("source_id")
+        source = sources.get(int(source_id)) if source_id not in (None, "", 0, "0") else None
+        if source is not None:
+            found |= by_source_id.get(source.id, set())
+            if source.name:
+                found |= by_source_name.get(source.name, set())
+        out[row.id] = len(found)
+    return out

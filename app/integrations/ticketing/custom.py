@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from app.config import Settings
+from app.config import Settings, enabled_ticketing_providers
 
 log = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class CustomCrmClient:
 
     @property
     def configured(self) -> bool:
-        return self.settings.ticketing_connection.configured
+        return "custom" in enabled_ticketing_providers(self.settings) and self.settings.ticketing_connection.configured
 
     async def create_issue(
         self,

@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Debugger{% endblock %}
 {% block heading %}Pipeline debugger{% endblock %}
-{% block lede %}Temporary learning console. Enter a CVE ID (optionally paste sample text as if from a Local .txt file) and press Run to walk every processing stage with the exact module and function that handles it.{% endblock %}
+{% block lede %}Temporary learning console. Enter a CVE ID (optionally paste sample text as if from a Local .txt file) and press Run. Each stage explains what it did, who matched and why — or why nothing matched — and who would be notified. Debugger never saves records and never sends tickets or mail. To persist a CVE through the real pipeline, use Manage Input Sources → Inline CVE.{% endblock %}
 {% block actions %}
-  <a class="btn-ghost" href="/settings">Open Settings</a>
+  <a class="btn-ghost" href="/sources">Ingest via Input Sources</a>
 {% endblock %}
 {% block content %}
   <section class="panel debug-panel">
     <div class="panel-head">
       <h2>Debug run</h2>
-      <p class="muted">Simulates Local TEXT → regex → enrichment → inventory matching using live Settings.</p>
+      <p class="muted">Simulates Local TEXT → regex → enrichment → Internal systems matching → a ticketing plan from live Settings. Nothing is stored. Nothing is sent. The last stage lists who would receive an owner or hunt ticket on a real ingest.</p>
     </div>
     <form id="debug-form" class="settings-form debug-form">
       <label>CVE ID
@@ -17,10 +17,6 @@
       </label>
       <label>Optional sample text (Local file content)
         <textarea class="input debug-textarea" id="debug-text" rows="4" placeholder="Paste advisory text containing the CVE ID, as if dropped into the Local inbox folder…"></textarea>
-      </label>
-      <label class="switch">
-        <input type="checkbox" id="debug-persist" checked />
-        <span>Persist CVE to local tracking table (vulnerabilities)</span>
       </label>
       <div class="filters">
         <button class="btn" type="submit" id="debug-run">Run</button>
@@ -40,7 +36,7 @@
   <section class="panel">
     <div class="panel-head">
       <h2>Stage timeline</h2>
-      <p class="muted">Each card is one pipeline stage with the code path that executed.</p>
+      <p class="muted">Each station appears as soon as it has a result, with a breakdown of what ran. A Working indicator shows before the next stage starts.</p>
     </div>
     <div class="debug-timeline" id="debug-timeline">
       <p class="muted debug-empty">Run a CVE to see the stage-by-stage trace.</p>
@@ -66,6 +62,7 @@
         </div>
       </div>
       <p class="debug-step-summary" data-slot="summary"></p>
+      <ol class="debug-breakdown" data-slot="breakdown" hidden></ol>
       <details class="debug-detail">
         <summary>Details / code path</summary>
         <pre class="pre" data-slot="detail"></pre>
@@ -80,5 +77,5 @@
   </template>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/debug.js"></script>
+<script src="/static/js/debug.js?v={{ version }}-autorun1"></script>
 {% endblock %}

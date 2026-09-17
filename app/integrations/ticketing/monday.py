@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from app.config import Settings
+from app.config import Settings, enabled_ticketing_providers
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class MondayClient:
 
     @property
     def configured(self) -> bool:
-        if not self.settings.ticketing_enabled:
+        if "monday" not in enabled_ticketing_providers(self.settings):
             return False
         token = self.settings.ticketing_password or self.settings.jira_api_token
         return bool(token and self.settings.monday_board_id)

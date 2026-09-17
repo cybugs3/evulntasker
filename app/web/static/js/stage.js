@@ -90,7 +90,7 @@ function renderExtraction(data) {
   const tbody = document.getElementById("stage-tbody");
   const rows = data.rows || [];
   if (!rows.length) {
-    setEmptyRow(tbody, 5, "No CVE records at this stage.");
+    setEmptyRow(tbody, 5, "No extracted CVE records yet.");
     return;
   }
   tbody.replaceChildren();
@@ -98,8 +98,13 @@ function renderExtraction(data) {
     const tr = useTemplate("tpl-extract-row");
     setCveLink(tr, row.href, row.cve_id);
     slot(tr, "source").textContent = dash(row.source);
-    slot(tr, "status").replaceChildren(makePipelinePill(row.status));
-    slot(tr, "ai").replaceChildren(row.ai_extract ? makePipelinePill("AI_FALLBACK") : mutedText("regex"));
+    slot(tr, "status").replaceChildren(
+      labeledPill(
+        row.waiting ? "st-paused" : row.unmatched ? "st-paused" : row.completed ? "st-ok" : "st-syncing",
+        row.run_label || row.station_label || pipelineStatus(row.status)
+      )
+    );
+    slot(tr, "ai").replaceChildren(row.ai_extract ? labeledPill("st-ok", "AI") : mutedText("regex"));
     slot(tr, "updated").textContent = fmtTime(row.updated_at);
     tbody.appendChild(tr);
   });
@@ -109,7 +114,7 @@ function renderEnrichment(data) {
   const tbody = document.getElementById("stage-tbody");
   const rows = data.rows || [];
   if (!rows.length) {
-    setEmptyRow(tbody, 6, "Nothing waiting for enrichment. Extracted CVEs will appear here.");
+    setEmptyRow(tbody, 6, "No CVE records to enrich yet.");
     return;
   }
   tbody.replaceChildren();
@@ -121,8 +126,14 @@ function renderEnrichment(data) {
     slot(tr, "vector").textContent = dash(row.attack_vector);
     slot(tr, "missing").textContent = (row.missing || []).join(", ") || "—";
     let method;
-    if (row.ai_enrich) method = makePipelinePill("AI_FALLBACK");
+    if (row.waiting) {
+      const when = row.retry_at ? ` Retry ${fmtTime(row.retry_at)}` : "";
+      const timed = row.wait_kind === "timeout" || row.wait_kind === "unreachable";
+      method = labeledPill("st-paused", `${timed ? "NVD/EPSS timed out" : "Waiting for intel"}${when}`);
+      method.title = row.wait_reason || "Matching and tickets are paused until enrichment is complete.";
+    } else if (row.ai_enrich) method = labeledPill("st-ok", "AI");
     else if (row.intel) method = labeledPill("st-ok", "NVD/EPSS");
+    else if (row.skipped) method = labeledPill("st-paused", "Skipped");
     else method = mutedText("No intel yet");
     slot(tr, "method").replaceChildren(method);
     tbody.appendChild(tr);
@@ -145,7 +156,15 @@ function renderMatching(data) {
     slot(tr, "owner").textContent = dash(row.owner);
     slot(tr, "team").textContent = row.team || "";
     slot(tr, "method").textContent = dash(row.method);
-    slot(tr, "status").replaceChildren(row.ai_match ? makePipelinePill("AI_FALLBACK") : makePipelinePill(row.status));
+    const unmatched = Boolean(row.unmatched);
+    slot(tr, "status").replaceChildren(
+      unmatched
+        ? labeledPill("st-paused", row.run_label || "Unmatched")
+        : labeledPill(
+            row.completed ? "st-ok" : "st-syncing",
+            row.run_label || row.station_label || (row.ai_match ? "AI" : "Matched")
+          )
+    );
     tbody.appendChild(tr);
   });
 }
@@ -155,7 +174,7 @@ function renderActions(data) {
   const hint = document.getElementById("ticketing-hint");
   if (hint) {
     if (ticketing.connected) {
-      hint.textContent = `Ticketing is connected to ${ticketing.provider_label}. Owner ticket, hunt ticket, and generated Sigma/KQL/XQL.`;
+      hint.textContent = `Ticketing is connected to ${ticketing.provider_label}. Only matched CVEs get tickets.`;
     } else {
       hint.textContent =
         "No ticketing system is connected. Configure Jira, Monday.com, email (mail relay), or an internal CRM in Settings. Tasks stay waiting until a provider is enabled.";
@@ -190,10 +209,17 @@ async function loadStage() {
   const data = await api(`/api/pipeline/${stage}`);
   renderKpis(data.kpis || {});
   (renderers[stage] || renderExtraction)(data);
+  stampUpdated(true);
 }
 
 loadStage().catch((err) => {
+  stampUpdated(false);
   const tbody = document.getElementById("stage-tbody");
   if (tbody) setEmptyRow(tbody, 7, `Failed to load queue: ${err.message}`);
 });
-setInterval(loadStage, 30000);
+setInterval(() => {
+  loadStage().catch((err) => {
+    stampUpdated(false);
+    console.error(err);
+  });
+}, 30000);

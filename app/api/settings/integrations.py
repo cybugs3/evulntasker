@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -88,6 +88,10 @@ class ItnmIn(AssetConnectionIn):
 
 class TicketingIn(BaseModel):
     enabled: bool = False
+    enabled_jira: bool = False
+    enabled_monday: bool = False
+    enabled_email: bool = False
+    enabled_custom: bool = False
     provider: str = "jira"
     host: str = ""
     port: int = Field(default=443, ge=1, le=65535)
@@ -189,17 +193,25 @@ def save_ai(body: AiIn) -> dict[str, Any]:
     if mode not in {"direct", "org_llm"}:
         mode = "direct"
     default_base, default_model = AI_PROVIDER_DEFAULTS[provider]
+    incoming_key = (body.api_key or "").strip()
+    saved_key = (get_app_settings().ai_api_key or "").strip()
+    has_key = bool(incoming_key or saved_key)
+    enabled = bool(body.enabled) and has_key
     updates = {
-        "AI_ENABLED": "true" if body.enabled else "false",
+        "AI_ENABLED": "true" if enabled else "false",
         "AI_PROVIDER": provider,
         "AI_ENRICHMENT_MODE": mode,
         "AI_API_BASE": body.api_base.strip() or default_base,
         "AI_MODEL": body.model.strip() or default_model,
     }
-    if body.api_key:
-        updates["AI_API_KEY"] = body.api_key
+    if incoming_key:
+        updates["AI_API_KEY"] = incoming_key
     save_env(updates)
-    return {"ok": True}
+    return {
+        "ok": True,
+        "enabled": enabled,
+        "needs_key": bool(body.enabled) and not has_key,
+    }
 
 
 @router.put("/settings/assets/cmdb")
@@ -233,7 +245,13 @@ def save_sonatype(body: SonatypeIn) -> dict[str, Any]:
     if body.password:
         updates["SONATYPE_PASSWORD"] = body.password
     save_env(updates)
-    return {"ok": True}
+    started = False
+    if body.enabled:
+        from app.services.inventory_sync import start_sonatype_sync
+
+        start_sonatype_sync()
+        started = True
+    return {"ok": True, "sync_started": started}
 
 
 @router.put("/settings/assets/itnm")
@@ -301,9 +319,26 @@ def save_ticketing(body: TicketingIn) -> dict[str, Any]:
     provider = (body.provider or "jira").strip().lower()
     if provider not in {"jira", "monday", "custom", "email"}:
         provider = "jira"
+    flags = {
+        "jira": body.enabled_jira,
+        "monday": body.enabled_monday,
+        "email": body.enabled_email,
+        "custom": body.enabled_custom,
+    }
+    if not any(flags.values()) and body.enabled:
+        flags[provider] = True
+    any_on = any(flags.values())
+    if flags.get(provider):
+        stored_provider = provider
+    else:
+        stored_provider = next((name for name in ("jira", "monday", "email", "custom") if flags[name]), "jira")
     updates = {
-        "TICKETING_ENABLED": "true" if body.enabled else "false",
-        "TICKETING_PROVIDER": provider,
+        "TICKETING_ENABLED": "true" if any_on else "false",
+        "TICKETING_PROVIDER": stored_provider,
+        "TICKETING_JIRA_ENABLED": "true" if flags["jira"] else "false",
+        "TICKETING_MONDAY_ENABLED": "true" if flags["monday"] else "false",
+        "TICKETING_EMAIL_ENABLED": "true" if flags["email"] else "false",
+        "TICKETING_CUSTOM_ENABLED": "true" if flags["custom"] else "false",
         "TICKETING_HOST": body.host.strip(),
         "TICKETING_PORT": str(body.port),
         "TICKETING_USE_TLS": "true" if body.use_tls else "false",
@@ -334,7 +369,7 @@ def save_ticketing(body: TicketingIn) -> dict[str, Any]:
     updates["SMTP_RELAY_USE_SSL"] = "true" if mode == "ssl" else "false"
     if body.password:
         updates["TICKETING_PASSWORD"] = body.password
-        if provider == "jira":
+        if flags["jira"]:
             updates["JIRA_API_TOKEN"] = body.password
     if body.smtp_password:
         updates["SMTP_RELAY_PASSWORD"] = body.smtp_password
@@ -343,22 +378,28 @@ def save_ticketing(body: TicketingIn) -> dict[str, Any]:
 
 
 @router.post("/settings/ticketing/test")
-async def test_ticketing() -> dict[str, Any]:
+async def test_ticketing(provider: str | None = Query(None)) -> dict[str, Any]:
+    import smtplib
+
     import httpx
 
+    from app.config import enabled_ticketing_providers
     from app.utils.integration_connection import probe_connection
 
     cfg = get_app_settings()
-    if not cfg.ticketing_enabled:
-        raise HTTPException(400, "Ticketing is disabled")
-    provider = (cfg.ticketing_provider or "jira").lower()
+    enabled = enabled_ticketing_providers(cfg)
+    requested = (provider or "").strip().lower()
+    if requested not in {"jira", "monday", "custom", "email"}:
+        requested = enabled[0] if enabled else (cfg.ticketing_provider or "jira").lower()
+    if requested not in enabled:
+        raise HTTPException(400, f"{requested.title()} ticketing is disabled")
     conn = cfg.ticketing_connection
-    if not conn.base_url and provider not in {"monday", "email"}:
+    if not conn.base_url and requested not in {"monday", "email"}:
         raise HTTPException(400, "Ticketing host is required")
     try:
-        if provider == "jira":
+        if requested == "jira":
             return await probe_connection(conn, "/rest/api/3/myself")
-        if provider == "monday":
+        if requested == "monday":
             token = cfg.ticketing_password or cfg.jira_api_token
             if not token:
                 raise HTTPException(400, "Monday API token is required")
@@ -370,18 +411,27 @@ async def test_ticketing() -> dict[str, Any]:
                 )
                 response.raise_for_status()
                 return {"ok": True, "status": response.status_code, "provider": "monday"}
-        if provider == "email":
+        if requested == "email":
             from app.integrations.smtp_relay import SmtpRelayClient
 
             relay = SmtpRelayClient(cfg)
             if relay.configured:
-                return relay.probe()
+                return relay.send_test()
             from app.integrations.exchange import ExchangeClient
 
             return ExchangeClient.from_app().probe()
         return await probe_connection(conn, cfg.custom_ticketing_api_path or "/")
+    except smtplib.SMTPAuthenticationError:
+        user = (getattr(cfg, "smtp_relay_username", "") or "").strip() or "(no username)"
+        host = (getattr(cfg, "smtp_relay_host", "") or "").strip() or "SMTP server"
+        raise HTTPException(
+            400,
+            f"{host} rejected the login for {user}. "
+            "The username must be the mailbox that owns this password. "
+            "Restart EVulnTasker after changing code, then Save and Test again.",
+        ) from None
     except Exception as exc:
-        raise HTTPException(400, f"Ticketing test failed: {exc}") from exc
+        raise HTTPException(400, f"Ticketing test failed: {exc}") from None
 
 
 @router.get("/settings/message")
@@ -422,14 +472,23 @@ def preview_message_templates(body: MessageTemplateIn) -> dict[str, Any]:
     }
 
 
-@router.post("/settings/reset-system")
-def reset_system(db: Session = Depends(get_db)) -> dict[str, Any]:
-    from app.services.wipe import reset_system_data
+def _reset_internal_systems(db: Session) -> dict[str, Any]:
+    from app.services.wipe import wipe_internal_systems
 
     try:
-        return reset_system_data(db)
+        return wipe_internal_systems(db)
     except Exception as exc:
-        raise HTTPException(500, f"System reset failed: {exc}") from exc
+        raise HTTPException(500, f"Internal systems reset failed: {exc}") from exc
+
+
+@router.post("/settings/reset-system")
+def reset_system(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _reset_internal_systems(db)
+
+
+@router.post("/settings/reset-internal-systems")
+def reset_internal_systems(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return _reset_internal_systems(db)
 
 
 @router.post("/settings/wipe-cve-data")
@@ -439,7 +498,7 @@ def wipe_cve_data(db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
         return wipe_collected_cve_data(db)
     except Exception as exc:
-        raise HTTPException(500, f"Wipe failed: {exc}") from exc
+        raise HTTPException(500, f"CVE wipe failed: {exc}") from exc
 
 
 def assets_payload(cfg: Any) -> dict[str, Any]:
@@ -451,16 +510,25 @@ def assets_payload(cfg: Any) -> dict[str, Any]:
         "itnm": itnm,
         "sync": {
             "enabled": bool(getattr(cfg, "inventory_sync_enabled", False)),
-            "seconds": int(getattr(cfg, "inventory_sync_seconds", 1800) or 1800),
+            "seconds": int(getattr(cfg, "inventory_sync_seconds", 86400) or 86400),
         },
     }
 
 
 def ticketing_payload(cfg: Any) -> dict[str, Any]:
+    from app.config import enabled_ticketing_providers
+
     conn = cfg.ticketing_connection
     password = cfg.ticketing_password or cfg.jira_api_token
+    enabled = enabled_ticketing_providers(cfg)
     return {
-        "enabled": cfg.ticketing_enabled,
+        "enabled": bool(enabled),
+        "enables": {
+            "jira": "jira" in enabled,
+            "monday": "monday" in enabled,
+            "email": "email" in enabled,
+            "custom": "custom" in enabled,
+        },
         "provider": cfg.ticketing_provider,
         "host": cfg.ticketing_host,
         "port": cfg.ticketing_port,

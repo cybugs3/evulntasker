@@ -109,6 +109,7 @@ def _upgrade_existing_schema() -> None:
                             WHEN 'extracted' THEN 'EXTRACTED'
                             WHEN 'enriching' THEN 'ENRICHED'
                             WHEN 'enriched' THEN 'ENRICHED'
+                            WHEN 'waiting_enrichment' THEN 'ENRICHED'
                             WHEN 'matching' THEN 'MATCHED'
                             WHEN 'matched' THEN 'MATCHED'
                             WHEN 'acting' THEN 'ACTIONED'
@@ -118,6 +119,35 @@ def _upgrade_existing_schema() -> None:
                             ELSE COALESCE(NULLIF(status, ''), 'INGESTED')
                         END
                         WHERE status IS NULL OR status = '' OR status = 'INGESTED'
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        UPDATE vulnerabilities SET status = 'ENRICHED'
+                        WHERE pipeline_status = 'waiting_enrichment'
+                          AND status != 'ENRICHED'
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        UPDATE vulnerabilities SET pipeline_status = CASE status
+                            WHEN 'EXTRACTED' THEN 'extracting'
+                            WHEN 'ENRICHED' THEN 'enriching'
+                            WHEN 'MATCHED' THEN 'matching'
+                            WHEN 'ACTIONED' THEN 'completed'
+                            WHEN 'AI_FALLBACK' THEN 'enriching'
+                            WHEN 'FAILED' THEN 'failed'
+                            ELSE pipeline_status
+                        END
+                        WHERE COALESCE(pipeline_status, '') IN ('', 'ingested')
+                          AND status IN (
+                            'EXTRACTED', 'ENRICHED', 'MATCHED', 'ACTIONED',
+                            'AI_FALLBACK', 'FAILED'
+                          )
                         """
                     )
                 )
@@ -137,3 +167,6 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _upgrade_existing_schema()
+    from app.services.ai_marks import clear_unconfigured_ai_marks
+
+    clear_unconfigured_ai_marks()

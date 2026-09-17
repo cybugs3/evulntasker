@@ -1,17 +1,141 @@
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.asset import AssetMatch
-from app.models.enums import PipelineStatus
 from app.models.jira import JiraTicket
 from app.models.vulnerability import Vulnerability
 from app.schemas.api import DashboardKpis
+from app.services.workflow import classify_vulnerabilities, count_workflow_states
 
 router = APIRouter()
+
+TREND_RANGES = {
+    "24h": (timedelta(hours=24), "hour"),
+    "7d": (timedelta(days=7), "day"),
+    "30d": (timedelta(days=30), "day"),
+    "90d": (timedelta(days=90), "week"),
+}
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _align(moment: datetime, grain: str) -> datetime:
+    moment = _utc(moment)
+    if grain == "hour":
+        return moment.replace(minute=0, second=0, microsecond=0)
+    if grain == "week":
+        monday = moment - timedelta(days=moment.weekday())
+        return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+    return moment.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _step(grain: str) -> timedelta:
+    if grain == "hour":
+        return timedelta(hours=1)
+    if grain == "week":
+        return timedelta(days=7)
+    return timedelta(days=1)
+
+
+def _label(moment: datetime, grain: str) -> str:
+    if grain == "hour":
+        return moment.strftime("%b %d %H:%M")
+    if grain == "week":
+        end = moment + timedelta(days=6)
+        if moment.month == end.month:
+            return f"{moment.strftime('%b %d')}–{end.strftime('%d')}"
+        return f"{moment.strftime('%b %d')}–{end.strftime('%b %d')}"
+    return moment.strftime("%b %d")
+
+
+def build_trend_series(
+    rows: list[dict],
+    *,
+    range_key: str = "7d",
+    now: datetime | None = None,
+) -> dict:
+    """Bucket Live Workflow outcomes for CVEs ingested in a time range."""
+    now = _utc(now) or datetime.now(timezone.utc)
+    span, grain = TREND_RANGES.get(range_key, TREND_RANGES["7d"])
+    start = _align(now - span, grain)
+    buckets: list[datetime] = []
+    cursor = start
+    while cursor <= now:
+        buckets.append(cursor)
+        cursor = cursor + _step(grain)
+
+    ingested_map: dict[datetime, set[int]] = defaultdict(set)
+    matched_map: dict[datetime, set[int]] = defaultdict(set)
+    unmatched_map: dict[datetime, set[int]] = defaultdict(set)
+    waiting_map: dict[datetime, set[int]] = defaultdict(set)
+
+    def place(when: datetime | None, ident: int, into: dict[datetime, set[int]]) -> None:
+        stamp = _utc(when)
+        if stamp is None or stamp < start:
+            return
+        key = _align(stamp, grain)
+        if key > buckets[-1]:
+            key = buckets[-1]
+        into[key].add(ident)
+
+    for index, row in enumerate(rows):
+        when = row.get("created_at")
+        place(when, index, ingested_map)
+        stamp = _utc(when)
+        if stamp is None or stamp < start:
+            continue
+        if row.get("matched"):
+            place(when, index, matched_map)
+        if row.get("unmatched"):
+            place(when, index, unmatched_map)
+        if row.get("waiting"):
+            place(when, index, waiting_map)
+
+    series = []
+    for bucket in buckets:
+        ingested = len(ingested_map.get(bucket, ()))
+        matched = len(matched_map.get(bucket, ()))
+        unmatched = len(unmatched_map.get(bucket, ()))
+        waiting = len(waiting_map.get(bucket, ()))
+        series.append(
+            {
+                "t": bucket.isoformat(),
+                "label": _label(bucket, grain),
+                "ingested": ingested,
+                "matched": matched,
+                "unmatched": unmatched,
+                "waiting": waiting,
+            }
+        )
+    ingested_n = sum(row["ingested"] for row in series)
+    matched_n = sum(row["matched"] for row in series)
+    unmatched_n = sum(row["unmatched"] for row in series)
+    waiting_n = sum(row["waiting"] for row in series)
+    reached = matched_n + unmatched_n
+    return {
+        "range": range_key if range_key in TREND_RANGES else "7d",
+        "granularity": grain,
+        "start": start.isoformat(),
+        "end": now.isoformat(),
+        "buckets": series,
+        "totals": {
+            "ingested": ingested_n,
+            "matched": matched_n,
+            "unmatched": unmatched_n,
+            "waiting": waiting_n,
+            "match_rate": round((matched_n / reached) * 100) if reached else 0,
+        },
+    }
 
 
 @router.get("/kpis", response_model=DashboardKpis)
@@ -23,65 +147,22 @@ def kpis(db: Session = Depends(get_db)) -> DashboardKpis:
         .scalar()
         or 0
     )
-    pending = (
-        db.query(func.count(Vulnerability.id))
-        .filter(
-            or_(
-                Vulnerability.status.in_(
-                    (
-                        PipelineStatus.INGESTED,
-                        PipelineStatus.EXTRACTED,
-                        PipelineStatus.ENRICHED,
-                        PipelineStatus.AI_FALLBACK,
-                    )
-                ),
-                Vulnerability.pipeline_status.in_(("ingested", "extracting", "enriching")),
-            )
-        )
-        .scalar()
-        or 0
-    )
-    matched = db.query(func.count(func.distinct(AssetMatch.vulnerability_id))).scalar() or 0
+    classified = classify_vulnerabilities(db)
+    counts = count_workflow_states(classified)
     jira_count = db.query(func.count(JiraTicket.id)).scalar() or 0
-    completed = (
-        db.query(func.count(Vulnerability.id))
-        .filter(
-            or_(
-                Vulnerability.status == PipelineStatus.ACTIONED,
-                Vulnerability.pipeline_status == "completed",
-            )
-        )
-        .scalar()
-        or 0
-    )
-    failed = (
-        db.query(func.count(Vulnerability.id))
-        .filter(
-            or_(
-                Vulnerability.status == PipelineStatus.FAILED,
-                Vulnerability.pipeline_status == "failed",
-            )
-        )
-        .scalar()
-        or 0
-    )
-    critical_open = (
-        db.query(func.count(Vulnerability.id))
-        .filter(
-            Vulnerability.severity == "CRITICAL",
-            Vulnerability.status != PipelineStatus.ACTIONED,
-            Vulnerability.pipeline_status != "completed",
-        )
-        .scalar()
-        or 0
+    critical_open = sum(
+        1
+        for item in classified
+        if (item["vuln"].severity or "").upper() == "CRITICAL"
+        and item["progress"].get("current") is not None
     )
     return DashboardKpis(
         ingested_today=ingested_today,
-        pending_enrichment=pending,
-        asset_matched=matched,
+        pending_enrichment=counts["waiting"],
+        asset_matched=counts["matched"],
         jira_tasks_created=jira_count,
-        completed=completed,
-        failed=failed,
+        completed=counts["completed"],
+        failed=counts["failed"],
         critical_open=critical_open,
     )
 
@@ -104,6 +185,40 @@ def overview(db: Session = Depends(get_db)) -> dict:
         "matching": matching_queue(db, include_rows=False).get("kpis") or {},
         "actions": actions_queue(db, include_rows=False).get("kpis") or {},
     }
+
+
+@router.get("/trends")
+def ingest_match_trends(
+    db: Session = Depends(get_db),
+    range: str = "7d",
+) -> dict:
+    """CVEs ingested in a window, classified with Live Workflow outcomes."""
+    range_key = range if range in TREND_RANGES else "7d"
+    classified = classify_vulnerabilities(db)
+    rows = []
+    for item in classified:
+        vuln = item["vuln"]
+        progress = item["progress"]
+        created = _utc(getattr(vuln, "created_at", None))
+        if created is None:
+            continue
+        rows.append(
+            {
+                "created_at": created,
+                "matched": "match" in (progress.get("done") or []),
+                "unmatched": bool(progress.get("unmatched")),
+                "waiting": bool(progress.get("waiting")),
+            }
+        )
+    return build_trend_series(rows, range_key=range_key)
+
+
+@router.get("/workflow")
+def live_workflow(db: Session = Depends(get_db)) -> dict:
+    """Live CVE positions across Ingest → Extraction → Enrichment → Matching → Actions."""
+    from app.services.workflow import build_workflow_snapshot
+
+    return build_workflow_snapshot(db)
 
 
 @router.get("/integrations")
@@ -145,19 +260,11 @@ def notifications(db: Session = Depends(get_db)) -> dict:
 
     settings = get_settings()
     items: list[dict] = []
-    failed = (
-        db.query(Vulnerability)
-        .filter(
-            or_(
-                Vulnerability.status == PipelineStatus.FAILED,
-                Vulnerability.pipeline_status == "failed",
-            )
-        )
-        .order_by(Vulnerability.updated_at.desc())
-        .limit(8)
-        .all()
-    )
-    for vuln in failed:
+    classified = classify_vulnerabilities(db)
+    counts = count_workflow_states(classified)
+    failed_items = [item for item in classified if item["progress"].get("failed")][:8]
+    for item in failed_items:
+        vuln = item["vuln"]
         items.append(
             {
                 "level": "error",
@@ -165,26 +272,34 @@ def notifications(db: Session = Depends(get_db)) -> dict:
                 "href": f"/vulnerabilities/{vuln.cve_id}",
             }
         )
-    pending = (
-        db.query(func.count(Vulnerability.id))
-        .filter(
-            or_(
-                Vulnerability.status.in_(
-                    (PipelineStatus.INGESTED, PipelineStatus.EXTRACTED, PipelineStatus.ENRICHED)
-                ),
-                Vulnerability.pipeline_status.in_(("ingested", "extracting", "enriching")),
-            )
-        )
-        .scalar()
-        or 0
-    )
-    if pending:
+    waiting_intel = counts["waiting"]
+    inflight = counts["inflight"]
+    unmatched = counts["unmatched"]
+    if waiting_intel:
         items.insert(
             0,
             {
                 "level": "warn",
-                "title": f"{pending} CVE(s) waiting for enrichment",
-                "href": "/",
+                "title": f"{waiting_intel} CVE(s) waiting for complete intel",
+                "href": "/enrichment",
+            },
+        )
+    elif unmatched:
+        items.insert(
+            0,
+            {
+                "level": "warn",
+                "title": f"{unmatched} CVE(s) unmatched against Internal systems",
+                "href": "/matching",
+            },
+        )
+    elif inflight:
+        items.insert(
+            0,
+            {
+                "level": "warn",
+                "title": f"{inflight} CVE(s) still in the pipeline",
+                "href": "/workflow",
             },
         )
     from app.api.settings.common import MANAGED_SOURCE_TYPES

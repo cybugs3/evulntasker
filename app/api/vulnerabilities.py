@@ -1,16 +1,23 @@
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.db.session import get_db
 from app.models.asset import AssetMatch
 from app.models.enums import PipelineStatus
-from app.models.pipeline import IngestEvent
 from app.models.vulnerability import Vulnerability
-from app.pipeline.orchestrator import PipelineOrchestrator
 from app.schemas.api import AuditLogOut, MatchOut, TicketOut, VulnerabilityOut
+from app.services.ingestion import InlineIngestError, queue_cve_rerun
+from app.services.wipe import delete_incoming_cves
+from app.services.workflow import (
+    canonical_pipeline_status,
+    classify_vulnerabilities,
+    progress_for_vuln,
+    station_journey,
+    workflow_flags,
+)
 
 router = APIRouter()
 
@@ -67,7 +74,11 @@ def _to_out(vuln: Vulnerability) -> VulnerabilityOut:
         for t in vuln.tickets
     ]
     return VulnerabilityOut.model_validate(vuln).model_copy(
-        update={"tickets": tickets, "status": _status_value(vuln)}
+        update={
+            "tickets": tickets,
+            "status": _status_value(vuln),
+            "pipeline_status": canonical_pipeline_status(vuln),
+        }
     )
 
 
@@ -76,11 +87,40 @@ def list_vulnerabilities(db: Session = Depends(get_db)) -> list[VulnerabilityOut
     rows = (
         db.query(Vulnerability)
         .options(joinedload(Vulnerability.tickets))
-        .order_by(Vulnerability.created_at.desc())
+        .order_by(Vulnerability.updated_at.desc())
         .limit(250)
         .all()
     )
-    return [_to_out(v) for v in rows]
+    classified = classify_vulnerabilities(db, rows)
+    out = []
+    for item in classified:
+        flags = workflow_flags(item["progress"])
+        out.append(
+            _to_out(item["vuln"]).model_copy(
+                update={
+                    "station": flags["station"],
+                    "station_label": flags["station_label"],
+                    "run": flags["run"],
+                    "run_label": flags["run_label"],
+                    "filter_key": flags["filter_key"],
+                    "unmatched": flags["unmatched"],
+                    "waiting": flags["waiting"],
+                }
+            )
+        )
+    return out
+
+
+class CveDeleteIn(BaseModel):
+    cve_ids: list[str] = Field(min_length=1, max_length=500)
+
+
+@router.post("/cves/delete")
+def delete_selected_incoming_cves(body: CveDeleteIn, db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return delete_incoming_cves(db, body.cve_ids)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/cves")
@@ -91,15 +131,25 @@ def list_incoming_cves(db: Session = Depends(get_db)) -> dict[str, Any]:
         .limit(500)
         .all()
     )
+    classified = classify_vulnerabilities(db, rows)
     return {
-        "count": len(rows),
-        "rows": [_cve_db_row(v) for v in rows],
+        "count": len(classified),
+        "rows": [_cve_db_row(item["vuln"], item["progress"]) for item in classified],
     }
 
 
-def _cve_db_row(vuln: Vulnerability) -> dict[str, Any]:
+def _cve_db_row(vuln: Vulnerability, progress: dict[str, Any] | None = None) -> dict[str, Any]:
+    flags = workflow_flags(progress or {})
     title = (vuln.title or "").strip()
     name = title or vuln.cve_id
+    matched = bool(flags.get("matched"))
+    unmatched = bool(flags.get("unmatched"))
+    if matched:
+        match_label = "TRUE"
+    elif unmatched:
+        match_label = "UNMATCHED"
+    else:
+        match_label = "—"
     return {
         "cve_id": vuln.cve_id,
         "name": name,
@@ -110,6 +160,12 @@ def _cve_db_row(vuln: Vulnerability) -> dict[str, Any]:
         "version": vuln.affected_versions or "",
         "severity": vuln.severity or "UNKNOWN",
         "cvss_score": vuln.cvss_score,
+        "matched": matched,
+        "unmatched": unmatched,
+        "match_label": match_label,
+        "station": flags.get("station"),
+        "station_label": flags.get("station_label"),
+        "run_label": flags.get("run_label"),
         "source_name": vuln.source_name or "",
         "created_at": vuln.created_at.isoformat() if vuln.created_at else None,
         "status": _status_value(vuln),
@@ -160,6 +216,10 @@ def get_vulnerability(cve_id: str, db: Session = Depends(get_db)) -> dict:
     ]
     audit_logs = [_audit_out(entry) for entry in (vuln.audit_logs or [])]
     audit_logs.sort(key=lambda row: row.get("timestamp") or "")
+    progress = progress_for_vuln(
+        vuln, has_match=bool(vuln.matches), has_ticket=bool(vuln.tickets)
+    )
+    flags = workflow_flags(progress)
     data = _to_out(vuln).model_dump()
     data.update(
         {
@@ -169,135 +229,64 @@ def get_vulnerability(cve_id: str, db: Session = Depends(get_db)) -> dict:
             "enrichment": vuln.enrichment,
             "audit_logs": audit_logs,
             "status": _status_value(vuln),
+            "stations": station_journey(progress),
+            **flags,
         }
     )
     return data
 
 
-@router.get("/tracker")
-def list_tracker(db: Session = Depends(get_db)) -> list[dict]:
-    rows = db.query(Vulnerability).order_by(Vulnerability.created_at.desc()).limit(500).all()
-    out = []
-    for vuln in rows:
-        cwes = getattr(vuln, "cwe_ids", None) or []
-        vuln_type = ", ".join(str(x) for x in cwes) if cwes else (getattr(vuln, "product_type", None) or vuln.severity or "—")
-        out.append(
-            {
-                "cve_id": vuln.cve_id,
-                "vuln_type": vuln_type,
-                "vendor": vuln.vendor,
-                "product": vuln.product,
-                "version": getattr(vuln, "affected_versions", None) or getattr(vuln, "affected_versions", None),
-            }
-        )
-    return out
-
-
 @router.get("/tracker/{cve_id}")
 def cve_journey(cve_id: str, db: Session = Depends(get_db)) -> dict:
-    """Stations a CVE has passed through in EVulnTasker."""
+    """Live Workflow stations a CVE has passed through."""
     cve = cve_id.upper().strip()
-    vuln = db.query(Vulnerability).filter(Vulnerability.cve_id == cve).one_or_none()
-    events = db.query(IngestEvent).order_by(IngestEvent.id.desc()).limit(80).all()
-    related = []
-    for event in events:
-        extracted = getattr(event, "extracted_cves", None) or getattr(event, "extracted_cves", None) or []
-        payload = getattr(event, "payload", None) or getattr(event, "payload", None) or {}
-        if not isinstance(payload, dict):
-            payload = {}
-        raw = str(getattr(event, "raw_text", "") or getattr(event, "raw_text", "") or "")
-        cves = [str(x).upper() for x in list(extracted) + list(payload.get("cves") or [])]
-        if cve in cves or cve in raw.upper():
-            related.append(event)
-
-    ingest_event = related[0] if related else None
-    tickets = list(vuln.tickets) if vuln else []
-    enrichment = (vuln.enrichment if vuln else None) or {}
-    has_nvd = bool(vuln and (vuln.cvss_score is not None or enrichment.get("nvd") or enrichment.get("epss")))
-    enrich_skipped = bool(isinstance(enrichment, dict) and enrichment.get("skipped"))
-    skipped = bool(vuln) and any(
-        "already exists" in str(entry.get("message") or "")
-        for run in (vuln.runs if vuln else [])
-        for entry in (run.log or [])
+    vuln = (
+        db.query(Vulnerability)
+        .options(
+            selectinload(Vulnerability.tickets),
+            selectinload(Vulnerability.matches),
+        )
+        .filter(Vulnerability.cve_id == cve)
+        .one_or_none()
     )
-    if vuln and not skipped:
-        skipped = False
-
-    def station(key, title, status, detail="", at=None):
-        return {"id": key, "title": title, "status": status, "detail": detail, "at": at}
-
-    ingest_at = ingest_event.received_at.isoformat() if ingest_event else (vuln.created_at.isoformat() if vuln else None)
-    stations = [
-        station(
-            "ingest",
-            "Input received",
-            "done" if (ingest_event or vuln) else "pending",
-            (ingest_event and f"Source event #{ingest_event.id}") or ("Record exists" if vuln else "No input yet"),
-            ingest_at,
-        ),
-        station(
-            "internal_db",
-            "Internal database check",
-            "done" if vuln else "pending",
-            "CVE already known — pipeline stopped" if skipped else ("CVE stored" if vuln else "Not in SQLite yet"),
-            vuln.created_at.isoformat() if vuln else None,
-        ),
-        station(
-            "external_db",
-            "External intelligence (NVD / EPSS)",
-            "skipped" if skipped or enrich_skipped else ("done" if has_nvd else ("pending" if vuln else "pending")),
-            (
-                "Skipped; CVE was already processed"
-                if skipped
-                else (
-                    "Enrichment disabled — using ingested fields"
-                    if enrich_skipped
-                    else ("NVD/EPSS data present" if has_nvd else "Waiting for enrichment")
-                )
-            ),
-            None,
-        ),
-        station(
-            "enrich",
-            "Enrichment",
-            "skipped" if skipped or enrich_skipped else ("done" if vuln and vuln.pipeline_status in ("matching", "acting", "completed") else ("pending" if vuln else "pending")),
-            "Enrichment skipped — using ingested fields" if enrich_skipped else (vuln.pipeline_status if vuln else "Not started"),
-            None,
-        ),
-        station(
-            "act",
-            "Team task opened",
-            "skipped" if skipped else ("done" if tickets else ("pending" if vuln else "pending")),
-            ", ".join(t.ticket_key for t in tickets) if tickets else ("No ticket yet" if not skipped else "Skipped"),
-            None,
-        ),
-    ]
+    if vuln is None:
+        return {
+            "cve_id": cve,
+            "found": False,
+            "known": False,
+            "skipped_as_duplicate": False,
+            "pipeline_status": None,
+            "vendor": None,
+            "product": None,
+            "version": None,
+            "stations": station_journey({}),
+            **workflow_flags({}),
+        }
+    progress = progress_for_vuln(
+        vuln, has_match=bool(vuln.matches), has_ticket=bool(vuln.tickets)
+    )
+    flags = workflow_flags(progress)
     return {
         "cve_id": cve,
-        "found": bool(vuln or ingest_event),
-        "known": bool(vuln),
-        "skipped_as_duplicate": skipped,
-        "pipeline_status": vuln.pipeline_status if vuln else None,
-        "vendor": vuln.vendor if vuln else None,
-        "product": vuln.product if vuln else None,
-        "version": vuln.affected_versions if vuln else None,
-        "stations": stations,
+        "found": True,
+        "known": True,
+        "skipped_as_duplicate": False,
+        "pipeline_status": canonical_pipeline_status(vuln),
+        "vendor": vuln.vendor,
+        "product": vuln.product,
+        "version": vuln.affected_versions,
+        "stations": station_journey(progress),
+        **flags,
     }
 
 
 
 @router.post("/vulnerabilities/{cve_id}/reprocess")
-async def reprocess(cve_id: str, db: Session = Depends(get_db)) -> dict:
-    vuln = db.query(Vulnerability).filter(Vulnerability.cve_id == cve_id.upper()).one_or_none()
-    if not vuln:
-        raise HTTPException(404, "CVE not found")
-    orchestrator = PipelineOrchestrator(db)
-    from app.models.pipeline import PipelineRun
-
-    run = PipelineRun(vulnerability_id=vuln.id, current_step="enrich", status="running", log=[])
-    db.add(run)
-    db.commit()
-    await orchestrator._enrich_match_act(run, vuln, ai_fallback=True)
-    run.status = "completed"
-    db.commit()
-    return {"status": "ok", "cve_id": vuln.cve_id, "pipeline_status": vuln.pipeline_status}
+def reprocess(cve_id: str, db: Session = Depends(get_db)) -> dict:
+    try:
+        event = queue_cve_rerun(db, cve_id)
+    except InlineIngestError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    cves = list(event.extracted_cves or [])
+    label = str(cves[0] if cves else cve_id).upper()
+    return {"status": "queued", "cve_id": label, "event_id": event.id}

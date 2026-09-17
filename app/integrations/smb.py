@@ -38,6 +38,11 @@ def _unc(server: str, share: str, folder: str = "", name: str = "") -> str:
     return "\\\\" + "\\".join(parts)
 
 
+def unc_path(server: str, share: str, folder: str = "") -> str:
+    """Full UNC as configured: \\\\server\\share\\folder."""
+    return _unc(server, share, folder)
+
+
 def normalize_locations(cfg: dict[str, Any] | None) -> list[dict[str, str]]:
     """Turn stored config into ``[{name, server, share, path}]`` (legacy single location included)."""
     cfg = dict(cfg or {})

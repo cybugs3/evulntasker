@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Internal systems{% endblock %}
 {% block heading %}Internal systems{% endblock %}
-{% block lede %}Manual catalog of in-org products. Add rows one by one or import a CSV. Automatic discovery from CMDB / Sonatype / ITNM comes later.{% endblock %}
+{% block lede %}Local catalog of in-org products used by CVE matching. Seed it at setup (manual rows or CSV). CMDB / Sonatype / ITNM later sample the network on a schedule and insert only new equipment — they are not part of the CVE pipeline.{% endblock %}
 {% block actions %}
   <a class="btn-ghost" href="/cves">Incoming CVEs</a>
 {% endblock %}
@@ -75,15 +75,28 @@
     </form>
   </section>
 
-  <section class="panel">
-    <div class="panel-head">
-      <h2>Systems database</h2>
-      <p class="muted">Only rows you added or imported. Empty until you enter data.</p>
+  <section class="panel" id="inv-catalog-panel">
+    <div class="panel-head inv-table-head">
+      <div class="panel-head-copy">
+        <h2>Systems database</h2>
+        <p class="muted">Only rows you added or imported. Empty until you enter data.</p>
+      </div>
+      <div class="inv-table-actions">
+        <button class="btn-ghost" type="button" id="inv-export-btn">Export CSV</button>
+        <button class="btn-ghost select-start" type="button" id="inv-select-start">Select to delete</button>
+        <div class="select-bar" id="inv-select-bar">
+          <span class="muted" id="inv-select-count"></span>
+          <button class="btn-ghost" type="button" id="inv-select-cancel">Cancel</button>
+          <button class="btn-danger" type="button" id="inv-select-ok" disabled>OK</button>
+        </div>
+      </div>
     </div>
+    <p class="muted select-status" id="inv-select-status"></p>
     <div class="table-wrap">
       <table class="data">
         <thead>
           <tr>
+            <th class="select-col"><input type="checkbox" id="inv-select-all" aria-label="Select all systems" /></th>
             <th>Vendor</th>
             <th>Product</th>
             <th>Product type</th>
@@ -92,7 +105,7 @@
             <th>Email</th>
             <th>Team</th>
             <th>Last update</th>
-            <th></th>
+            <th class="inv-row-actions"></th>
           </tr>
         </thead>
         <tbody id="inv-catalog">
@@ -102,8 +115,21 @@
     </div>
   </section>
 </div>
+<div class="confirm-overlay" id="inv-select-modal" hidden role="dialog" aria-modal="true" aria-labelledby="inv-select-modal-title">
+  <div class="confirm-card">
+    <div class="confirm-icon" aria-hidden="true">!</div>
+    <h2 id="inv-select-modal-title">This will delete the selected systems</h2>
+    <p class="confirm-lead">Are you sure you want to continue?</p>
+    <p class="muted">This cannot be undone. CVE match links for those systems will also be removed. Incoming CVEs stay in the database.</p>
+    <div class="confirm-actions">
+      <button class="btn-ghost" type="button" id="inv-select-modal-cancel">Cancel</button>
+      <button class="btn-danger" type="button" id="inv-select-modal-confirm">Yes, delete</button>
+    </div>
+  </div>
+</div>
 <template id="tpl-inv-row">
   <tr>
+    <td class="select-col"><input type="checkbox" data-select /></td>
     <td data-slot="vendor"></td>
     <td data-slot="product"></td>
     <td data-slot="product-type"></td>
@@ -120,5 +146,5 @@
 </template>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/inventory.js"></script>
+<script src="/static/js/inventory.js?v={{ version }}-selectdel1"></script>
 {% endblock %}

@@ -1,17 +1,32 @@
 {% extends "base.html" %}
 {% block title %}Enrichment{% endblock %}
 {% block heading %}Enrichment{% endblock %}
-{% block lede %}When Enrichment is on, NVD/EPSS and optional AI fill scores and a clear description. When it is off, the pipeline skips this stage and matches ingested fields against Internal systems.{% endblock %}
+{% block lede %}When Enrichment is on, NVD/EPSS fill scores and identity. If that data is incomplete, matching and ticketing wait and the CVE is retried until the intel is complete.{% endblock %}
 {% block actions %}
   <a class="btn-ghost" href="/settings#enrichment">Enable / disable enrichment</a>
-  <a class="btn-ghost" href="/settings#intel">Configure NVD / EPSS</a>
+  <a class="btn-ghost" href="/settings#feeds/web">Configure NVD / EPSS</a>
   <a class="btn-ghost" href="/settings#ai">Configure AI</a>
+  <span class="updated-stamp" id="page-updated">Updated —</span>
 {% endblock %}
 {% block content %}
+  <section class="sources-kpis" id="stage-kpis">
+    <div class="main-tile">
+      <div class="kpi-label">Waiting for intel</div>
+      <div class="kpi-value danger" data-k="waiting">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Enriched</div>
+      <div class="kpi-value" data-k="enriched">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Incomplete</div>
+      <div class="kpi-value" data-k="incomplete">—</div>
+    </div>
+  </section>
   <section class="panel">
     <div class="panel-head">
-      <h2>Enrichment queue</h2>
-      <p class="muted">When Enrichment is enabled in Settings, Python calls NVD then EPSS, then optional AI. When it is disabled, this queue stays empty and matching runs on ingested fields.</p>
+      <h2>Enrichment records</h2>
+      <p class="muted">CVEs that reached enrichment. Incomplete intel, including NVD/EPSS timeouts, stays here as <strong>Waiting for intel</strong> until vendor, product, and scores return — then matching and tickets continue. Timeout is not a Failed CVE.</p>
     </div>
     <div class="table-wrap">
       <table class="data">
@@ -43,5 +58,5 @@
   </template>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/stage.js?v={{ version }}" data-stage="enrichment"></script>
+<script src="/static/js/stage.js?v={{ version }}-waitto1" data-stage="enrichment"></script>
 {% endblock %}

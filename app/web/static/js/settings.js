@@ -45,10 +45,16 @@ let aiSaved = {
   model: "",
   api_key_set: false,
 };
+let atomFeedsReady = false;
 
 const ENRICH_HINTS = {
-  on: "Look up NVD / EPSS and, if configured, rewrite the description with AI. Then match the CVE against Internal systems.",
-  off: "Skip NVD, EPSS, and AI. After extract, go straight to matching the ingested CVE against Internal systems.",
+  on: "Look up NVD / EPSS. If AI modules are also enabled, the model may rewrite the owner-facing description. Then match against Internal systems.",
+  off: "Skip NVD and EPSS. After extract, go straight to matching ingested fields against Internal systems. The AI modules switch still controls extract and matching.",
+};
+
+const AI_HINTS = {
+  on: "Requires an API key. The selected provider is used only when regex/NVD/Internal systems cannot finish the step.",
+  off: "No LLM calls anywhere. Tickets still open from Ticketing using ingested/NVD fields and the Message templates.",
 };
 
 function selectedChoice(group) {
@@ -91,6 +97,31 @@ function syncEnrichmentUi() {
   if (hint) hint.textContent = on ? ENRICH_HINTS.on : ENRICH_HINTS.off;
 }
 
+function aiEnabled() {
+  return selectedChoice("ai-stage") !== "disable";
+}
+
+function setAiEnabled(on) {
+  setChoice("ai-stage", on ? "enable" : "disable");
+  if (on) {
+    const current = enabledAiProvider() || document.getElementById("ai-provider")?.value || aiSaved.provider || "gemini";
+    setAiProviderEnables(current, true);
+    const hidden = document.getElementById("ai-provider");
+    if (hidden) hidden.value = current;
+  }
+  syncAiUi();
+}
+
+function syncAiUi() {
+  const on = aiEnabled();
+  const body = document.getElementById("ai-enabled-body");
+  if (body) body.hidden = !on;
+  const note = document.getElementById("ai-disabled-note");
+  if (note) note.hidden = on;
+  const hint = document.getElementById("ai-stage-hint");
+  if (hint) hint.textContent = on ? AI_HINTS.on : AI_HINTS.off;
+}
+
 function showTab(name) {
   document.querySelectorAll(".settings-tab").forEach((btn) => {
     btn.classList.toggle("is-active", btn.dataset.tab === name);
@@ -103,15 +134,16 @@ function showTab(name) {
 function applySettingsHash() {
   const raw = (location.hash || "").replace(/^#/, "").trim();
   if (!raw) return;
-  const aliases = { nvd: "intel", epss: "intel", intel: "intel", wipe: "system", reset: "system", mail: "message", template: "message", message: "message" };
+  const aliases = { nvd: "feeds", epss: "feeds", intel: "feeds", wipe: "reset", reset: "reset", system: "reset", mail: "message", template: "message", message: "message" };
   const [rawTab, subtab] = raw.split("/").map((part) => part.trim()).filter(Boolean);
   const tab = aliases[rawTab] || rawTab;
   if (!tab || !document.querySelector(`.settings-tab[data-tab="${tab}"]`)) return;
   showTab(tab);
-  if (!subtab) return;
+  const resolvedSub = subtab || (["intel", "nvd", "epss"].includes(rawTab) ? "web" : "");
+  if (!resolvedSub) return;
   const group = tab;
-  if (document.querySelector(`.settings-subtab[data-group="${group}"][data-subtab="${subtab}"]`)) {
-    showSubtab(subtab, group);
+  if (document.querySelector(`.settings-subtab[data-group="${group}"][data-subtab="${resolvedSub}"]`)) {
+    showSubtab(resolvedSub, group);
   }
 }
 
@@ -134,8 +166,12 @@ function showSubtab(name, group) {
   }
   if (group === "ticketing") {
     document.getElementById("ticketing-provider").value = name;
+    document.querySelectorAll("[data-ticketing-enable]").forEach((bar) => {
+      bar.hidden = bar.dataset.ticketingEnable !== name;
+    });
     const httpFields = document.getElementById("ticketing-http-fields");
     if (httpFields) httpFields.hidden = name === "email";
+    syncTicketingTestButton();
   }
 }
 
@@ -171,12 +207,15 @@ function fillAiConnectionFor(provider) {
 
 function onAiEnableToggle(provider, checked) {
   if (checked) {
+    setChoice("ai-stage", "enable");
     setAiProviderEnables(provider, true);
     document.getElementById("ai-provider").value = provider;
   } else {
     setAiProviderEnables(provider, false);
+    setChoice("ai-stage", "disable");
   }
   fillAiConnectionFor(provider);
+  syncAiUi();
 }
 
 function addAtomFeedRow(feed) {
@@ -196,6 +235,7 @@ function renderAtomFeeds(feeds) {
   list.replaceChildren();
   const rows = feeds && feeds.length ? feeds : [{ url: "", name: "" }];
   rows.forEach((feed) => addAtomFeedRow(feed));
+  atomFeedsReady = true;
 }
 
 function collectAtomFeeds() {
@@ -365,13 +405,48 @@ document.querySelectorAll(".settings-subtab").forEach((btn) => {
 window.addEventListener("hashchange", applySettingsHash);
 applySettingsHash();
 
+function formatProbeResult(result) {
+  if (!result || typeof result !== "object") return "OK.";
+  if (result.provider === "smtp" || result.host) {
+    const host = result.host || "SMTP";
+    const port = result.port ? `:${result.port}` : "";
+    const mode = result.mode ? ` (${result.mode})` : "";
+    if (result.sent && result.to) {
+      return `Sent a test email to ${result.to} via ${host}${port}${mode}. Check that inbox (and spam).`;
+    }
+    const user = result.username ? ` as ${result.username}` : "";
+    return `Connected to ${host}${port}${mode}${user}.`;
+  }
+  if (result.provider) return `OK — ${result.provider} connected.`;
+  return "OK — connection succeeded.";
+}
+
 function setStatus(id, text) {
   const el = document.getElementById(id);
-  if (el) el.textContent = text;
+  if (!el) return;
+  el.textContent = text;
+  const lower = String(text || "").toLowerCase();
+  el.classList.toggle("is-error", /fail|error|reject|not found/.test(lower));
+  el.classList.toggle("is-ok", /^(ok|saved|connected|sent|reset complete|delete complete)/.test(lower));
+}
+
+function showStoredSmtpAccount(username, passwordSet) {
+  const chip = document.getElementById("smtp-stored-account");
+  if (!chip) return;
+  const address = (username || "").trim();
+  if (!address) {
+    chip.hidden = true;
+    chip.textContent = "";
+    return;
+  }
+  chip.hidden = false;
+  chip.textContent = passwordSet
+    ? `Stored SMTP login: ${address} (password is saved)`
+    : `Stored SMTP login: ${address} (no password saved yet)`;
 }
 
 function feedStatusLine(source) {
-  if (!source || !source.enabled) return "";
+  if (!source) return "";
   return source.last_error ? `Last error: ${source.last_error}` : "";
 }
 
@@ -382,6 +457,7 @@ function hint(id, stored, kind) {
 }
 
 async function loadSettings() {
+  atomFeedsReady = false;
   const data = await api("/api/settings");
   const pg = data.postgres || {};
   const smb = data.smb || {};
@@ -406,7 +482,6 @@ async function loadSettings() {
     : "Active: SQLite file on this server";
   syncPgUi();
 
-  document.getElementById("smb-enabled").checked = Boolean(smb.enabled);
   document.getElementById("smb-name").value = smb.name || "";
   const smbLocations = Array.isArray(smb.locations) && smb.locations.length
     ? smb.locations
@@ -419,13 +494,11 @@ async function loadSettings() {
   hint("smb-password-hint", smb.password_set, "password");
   setStatus("smb-status", feedStatusLine(smb));
 
-  document.getElementById("local-enabled").checked = Boolean(local.enabled);
   document.getElementById("local-name").value = local.name || "";
   document.getElementById("local-path").value = local.path || "";
   document.getElementById("local-poll").value = local.poll_seconds || 60;
   setStatus("local-status", feedStatusLine(local));
 
-  document.getElementById("outlook-enabled").checked = Boolean(outlook.enabled);
   document.getElementById("outlook-name").value = outlook.name || "";
   document.getElementById("outlook-server").value = outlook.server || "";
   document.getElementById("outlook-domain").value = outlook.domain || "";
@@ -437,7 +510,6 @@ async function loadSettings() {
   hint("outlook-password-hint", outlook.password_set, "password");
   setStatus("outlook-status", feedStatusLine(outlook));
 
-  document.getElementById("web-enabled").checked = Boolean(web.enabled);
   document.getElementById("web-name").value = web.name || "";
   const pollEl = document.getElementById("web-poll");
   const pollValue = String(web.poll_seconds || 3600);
@@ -453,7 +525,8 @@ async function loadSettings() {
 
   const enrich = data.enrichment || {};
   setEnrichmentEnabled(enrich.enrichment_enabled !== false);
-  document.getElementById("intel-start").value = (enrich.intel_start_date || "2024-01-01").slice(0, 10);
+  const startEl = document.getElementById("intel-start");
+  if (startEl) startEl.value = (enrich.intel_start_date || "2024-01-01").slice(0, 10);
   renderIntelSources(enrich.sources || []);
   syncEnrichmentUi();
 
@@ -468,6 +541,7 @@ async function loadSettings() {
     api_key_set: Boolean(ai.api_key_set),
   };
   document.getElementById("ai-provider").value = provider;
+  setAiEnabled(aiSaved.enabled);
   setAiProviderEnables(provider, aiSaved.enabled);
   setChoice("ai-enrichment-mode", enrichMode);
   document.getElementById("ai-key").value = "";
@@ -488,7 +562,7 @@ async function loadSettings() {
 
   document.getElementById("sonatype-enabled").checked = Boolean(sonatype.enabled);
   document.getElementById("sonatype-host").value = sonatype.host || "";
-  document.getElementById("sonatype-port").value = sonatype.port || 443;
+  document.getElementById("sonatype-port").value = sonatype.port || 8070;
   document.getElementById("sonatype-use-tls").checked = sonatype.use_tls !== false;
   document.getElementById("sonatype-ignore-cert").checked = Boolean(sonatype.ignore_cert);
   document.getElementById("sonatype-api-path").value = sonatype.api_path || "";
@@ -509,7 +583,11 @@ async function loadSettings() {
   hint("itnm-password-hint", itnm.password_set, "password");
 
   const ticket = data.ticketing || {};
-  document.getElementById("ticketing-enabled").checked = Boolean(ticket.enabled);
+  const enables = ticket.enables || {};
+  document.getElementById("ticketing-enabled-jira").checked = Boolean(enables.jira);
+  document.getElementById("ticketing-enabled-monday").checked = Boolean(enables.monday);
+  document.getElementById("ticketing-enabled-email").checked = Boolean(enables.email);
+  document.getElementById("ticketing-enabled-custom").checked = Boolean(enables.custom);
   document.getElementById("ticketing-host").value = ticket.host || "";
   document.getElementById("ticketing-port").value = ticket.port || 443;
   document.getElementById("ticketing-use-tls").checked = ticket.use_tls !== false;
@@ -517,9 +595,18 @@ async function loadSettings() {
   document.getElementById("ticketing-username").value = ticket.username || "";
   document.getElementById("ticketing-password").value = "";
   hint("ticketing-password-hint", ticket.password_set, "token");
-  const ticketProvider = ticket.provider || "jira";
+  const keepTab = document.getElementById("ticket-form")?.dataset.loaded === "1";
+  const currentTab = document.getElementById("ticketing-provider").value;
+  const hashSub = (location.hash || "").replace(/^#/, "").split("/")[1] || "";
+  const firstEnabled = ["jira", "monday", "email", "custom"].find((name) => enables[name]);
+  const ticketProvider = (keepTab && currentTab)
+    || (["jira", "monday", "email", "custom"].includes(hashSub) ? hashSub : "")
+    || firstEnabled
+    || ticket.provider
+    || "jira";
   document.getElementById("ticketing-provider").value = ticketProvider;
   showSubtab(ticketProvider, "ticketing");
+  document.getElementById("ticket-form").dataset.loaded = "1";
   document.getElementById("jira-email").value = ticket.jira_user_email || "";
   document.getElementById("jira-project").value = ticket.jira_project_key || "VULN";
   document.getElementById("jira-hunt").value = ticket.jira_hunt_project_key || "HUNT";
@@ -539,12 +626,12 @@ async function loadSettings() {
   document.getElementById("smtp-ignore-cert").checked = Boolean(ticket.smtp_ignore_cert);
   document.getElementById("smtp-password").value = "";
   hint("smtp-password-hint", ticket.smtp_password_set, "password");
+  showStoredSmtpAccount(ticket.smtp_username, ticket.smtp_password_set);
   fillMessageForm(data.message || {});
 }
 
 function smbBody() {
   return {
-    enabled: document.getElementById("smb-enabled").checked,
     name: document.getElementById("smb-name").value.trim(),
     locations: collectSmbLocations(),
     domain: document.getElementById("smb-domain").value.trim(),
@@ -574,7 +661,6 @@ function syncPgUi() {
 
 function localBody() {
   return {
-    enabled: document.getElementById("local-enabled").checked,
     name: document.getElementById("local-name").value.trim(),
     path: document.getElementById("local-path").value.trim(),
     poll_seconds: Number(document.getElementById("local-poll").value || 60),
@@ -583,7 +669,6 @@ function localBody() {
 
 function outlookBody() {
   return {
-    enabled: document.getElementById("outlook-enabled").checked,
     name: document.getElementById("outlook-name").value.trim(),
     server: document.getElementById("outlook-server").value.trim(),
     domain: document.getElementById("outlook-domain").value.trim(),
@@ -597,29 +682,49 @@ function outlookBody() {
 
 function webApiBody() {
   return {
-    enabled: document.getElementById("web-enabled").checked,
     name: document.getElementById("web-name").value.trim(),
     feeds: collectAtomFeeds(),
     poll_seconds: Number(document.getElementById("web-poll").value || 3600),
+    intel_start_date: document.getElementById("intel-start")?.value || "",
   };
+}
+
+async function saveIntelStart() {
+  const start = document.getElementById("intel-start")?.value;
+  if (!start) return;
+  await api("/api/settings/enrichment", {
+    method: "PUT",
+    body: JSON.stringify({ intel_start_date: start }),
+  });
 }
 
 async function saveFeed(kind) {
   if (kind === "local") {
     await api("/api/settings/local", { method: "PUT", body: JSON.stringify(localBody()) });
+    await saveIntelStart();
     return;
   }
   if (kind === "smb") {
     await api("/api/settings/smb", { method: "PUT", body: JSON.stringify(smbBody()) });
+    await saveIntelStart();
     return;
   }
   if (kind === "outlook") {
     await api("/api/settings/outlook", { method: "PUT", body: JSON.stringify(outlookBody()) });
+    await saveIntelStart();
     return;
   }
   if (kind === "web-api") {
-    await api("/api/settings/web-api", { method: "PUT", body: JSON.stringify(webApiBody()) });
+    await saveWebApi();
   }
+}
+
+async function saveWebApi() {
+  if (!atomFeedsReady) {
+    throw new Error("ATOM feeds have not loaded yet. Wait a moment and try Save again.");
+  }
+  await api("/api/settings/web-api", { method: "PUT", body: JSON.stringify(webApiBody()) });
+  await saveIntelStart();
 }
 
 function postgresBody() {
@@ -645,6 +750,7 @@ document.querySelectorAll("[data-choice-group]").forEach((root) => {
     setChoice(root.dataset.choiceGroup, btn.dataset.choice);
     if (root.dataset.choiceGroup === "pg-mode") syncPgUi();
     if (root.dataset.choiceGroup === "enrich-stage") syncEnrichmentUi();
+    if (root.dataset.choiceGroup === "ai-stage") setAiEnabled(btn.dataset.choice !== "disable");
     if (root.dataset.choiceGroup === "smtp-tls") syncSmtpPortHint();
   });
 });
@@ -680,28 +786,34 @@ document.getElementById("pg-test").addEventListener("click", async () => {
 
 document.getElementById("smb-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  await api("/api/settings/smb", { method: "PUT", body: JSON.stringify(smbBody()) });
+  await saveFeed("smb");
   setStatus("smb-status", "Saved.");
   await loadSettings();
 });
 
 document.getElementById("local-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  await api("/api/settings/local", { method: "PUT", body: JSON.stringify(localBody()) });
+  await saveFeed("local");
   setStatus("local-status", "Saved.");
   await loadSettings();
 });
 
 document.getElementById("outlook-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  await api("/api/settings/outlook", { method: "PUT", body: JSON.stringify(outlookBody()) });
+  await saveFeed("outlook");
   setStatus("outlook-status", "Saved.");
   await loadSettings();
 });
 
+document.getElementById("intel-start-form")?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  await saveIntelStart();
+  setStatus("intel-start-status", "Saved. Incoming CVEs older than this date are ignored.");
+});
+
 document.getElementById("web-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  await api("/api/settings/web-api", { method: "PUT", body: JSON.stringify(webApiBody()) });
+  await saveWebApi();
   setStatus("web-status", "Saved.");
   await loadSettings();
 });
@@ -771,19 +883,6 @@ document.getElementById("enrich-stage-form").addEventListener("submit", async (e
   await loadSettings();
 });
 
-document.getElementById("enrich-form").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  await api("/api/settings/intel", {
-    method: "PUT",
-    body: JSON.stringify({
-      intel_start_date: document.getElementById("intel-start").value,
-      sources: collectIntelSources(),
-    }),
-  });
-  setStatus("enrich-status", "Saved.");
-  await loadSettings();
-});
-
 document.getElementById("ai-form").addEventListener("change", (ev) => {
   const box = ev.target.closest("[data-ai-provider]");
   if (!box || ev.target.type !== "checkbox") return;
@@ -793,10 +892,10 @@ document.getElementById("ai-form").addEventListener("change", (ev) => {
 document.getElementById("ai-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const provider = enabledAiProvider() || document.getElementById("ai-provider").value || "gemini";
-  await api("/api/settings/ai", {
+  const result = await api("/api/settings/ai", {
     method: "PUT",
     body: JSON.stringify({
-      enabled: Boolean(enabledAiProvider()),
+      enabled: aiEnabled(),
       provider,
       enrichment_mode: selectedAiEnrichmentMode(),
       api_base: document.getElementById("ai-base").value.trim(),
@@ -804,7 +903,13 @@ document.getElementById("ai-form").addEventListener("submit", async (ev) => {
       api_key: document.getElementById("ai-key").value,
     }),
   });
-  setStatus("ai-status", "Saved.");
+  if (result && result.needs_key) {
+    setStatus("ai-status", "AI stays off until you save an API key.");
+  } else if (result && result.enabled) {
+    setStatus("ai-status", "Saved. AI is on for this provider.");
+  } else {
+    setStatus("ai-status", "Saved. AI is off.");
+  }
   await loadSettings();
 });
 
@@ -829,12 +934,12 @@ document.getElementById("cmdb-form").addEventListener("submit", async (ev) => {
 
 document.getElementById("sonatype-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  await api("/api/settings/assets/sonatype", {
+  const saved = await api("/api/settings/assets/sonatype", {
     method: "PUT",
     body: JSON.stringify({
       enabled: document.getElementById("sonatype-enabled").checked,
       host: document.getElementById("sonatype-host").value.trim(),
-      port: Number(document.getElementById("sonatype-port").value || 443),
+      port: Number(document.getElementById("sonatype-port").value || 8070),
       use_tls: document.getElementById("sonatype-use-tls").checked,
       ignore_cert: document.getElementById("sonatype-ignore-cert").checked,
       api_path: document.getElementById("sonatype-api-path").value.trim(),
@@ -842,7 +947,12 @@ document.getElementById("sonatype-form").addEventListener("submit", async (ev) =
       password: document.getElementById("sonatype-password").value,
     }),
   });
-  setStatus("sonatype-status", "Saved.");
+  setStatus(
+    "sonatype-status",
+    saved && saved.sync_started
+      ? "Saved. Catalog sync started — applications and libraries will appear in Internal systems."
+      : "Saved."
+  );
   await loadSettings();
 });
 
@@ -902,54 +1012,87 @@ document.getElementById("itnm-test").addEventListener("click", async () => {
   }
 });
 
-document.getElementById("ticket-form").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
+function ticketingBody() {
+  return {
+    enabled_jira: document.getElementById("ticketing-enabled-jira").checked,
+    enabled_monday: document.getElementById("ticketing-enabled-monday").checked,
+    enabled_email: document.getElementById("ticketing-enabled-email").checked,
+    enabled_custom: document.getElementById("ticketing-enabled-custom").checked,
+    provider: document.getElementById("ticketing-provider").value,
+    host: document.getElementById("ticketing-host").value.trim(),
+    port: Number(document.getElementById("ticketing-port").value || 443),
+    use_tls: document.getElementById("ticketing-use-tls").checked,
+    ignore_cert: document.getElementById("ticketing-ignore-cert").checked,
+    username: document.getElementById("ticketing-username").value.trim(),
+    password: document.getElementById("ticketing-password").value,
+    jira_user_email: document.getElementById("jira-email").value.trim(),
+    jira_project_key: document.getElementById("jira-project").value.trim(),
+    jira_hunt_project_key: document.getElementById("jira-hunt").value.trim(),
+    jira_issue_type: document.getElementById("jira-type").value.trim(),
+    monday_board_id: document.getElementById("monday-board").value.trim(),
+    monday_group_id: document.getElementById("monday-group").value.trim(),
+    custom_api_path: document.getElementById("custom-api-path").value.trim(),
+    custom_owner_project: document.getElementById("custom-owner-project").value.trim(),
+    custom_hunt_project: document.getElementById("custom-hunt-project").value.trim(),
+    hunt_email: document.getElementById("ticket-hunt-email").value.trim(),
+    fallback_owner_email: document.getElementById("ticket-owner-email").value.trim(),
+    smtp_host: document.getElementById("smtp-host").value.trim(),
+    smtp_port: Number(document.getElementById("smtp-port").value || 25),
+    smtp_tls_mode: selectedChoice("smtp-tls") || "plain",
+    smtp_username: document.getElementById("smtp-username").value.trim(),
+    smtp_password: document.getElementById("smtp-password").value,
+    smtp_from: document.getElementById("smtp-from").value.trim(),
+    smtp_ignore_cert: document.getElementById("smtp-ignore-cert").checked,
+  };
+}
+
+async function saveTicketing() {
   await api("/api/settings/ticketing", {
     method: "PUT",
-    body: JSON.stringify({
-      enabled: document.getElementById("ticketing-enabled").checked,
-      provider: document.getElementById("ticketing-provider").value,
-      host: document.getElementById("ticketing-host").value.trim(),
-      port: Number(document.getElementById("ticketing-port").value || 443),
-      use_tls: document.getElementById("ticketing-use-tls").checked,
-      ignore_cert: document.getElementById("ticketing-ignore-cert").checked,
-      username: document.getElementById("ticketing-username").value.trim(),
-      password: document.getElementById("ticketing-password").value,
-      jira_user_email: document.getElementById("jira-email").value.trim(),
-      jira_project_key: document.getElementById("jira-project").value.trim(),
-      jira_hunt_project_key: document.getElementById("jira-hunt").value.trim(),
-      jira_issue_type: document.getElementById("jira-type").value.trim(),
-      monday_board_id: document.getElementById("monday-board").value.trim(),
-      monday_group_id: document.getElementById("monday-group").value.trim(),
-      custom_api_path: document.getElementById("custom-api-path").value.trim(),
-      custom_owner_project: document.getElementById("custom-owner-project").value.trim(),
-      custom_hunt_project: document.getElementById("custom-hunt-project").value.trim(),
-      hunt_email: document.getElementById("ticket-hunt-email").value.trim(),
-      fallback_owner_email: document.getElementById("ticket-owner-email").value.trim(),
-      smtp_host: document.getElementById("smtp-host").value.trim(),
-      smtp_port: Number(document.getElementById("smtp-port").value || 25),
-      smtp_tls_mode: selectedChoice("smtp-tls") || "plain",
-      smtp_username: document.getElementById("smtp-username").value.trim(),
-      smtp_password: document.getElementById("smtp-password").value,
-      smtp_from: document.getElementById("smtp-from").value.trim(),
-      smtp_ignore_cert: document.getElementById("smtp-ignore-cert").checked,
-    }),
+    body: JSON.stringify(ticketingBody()),
   });
-  setStatus("ticket-status", "Saved.");
-  await loadSettings();
-});
+}
 
-document.getElementById("ticketing-test").addEventListener("click", async () => {
-  document.getElementById("ticket-form").requestSubmit();
-  setStatus("ticket-status", "Testing…");
+document.getElementById("ticket-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  setStatus("ticket-status", "Saving…");
   try {
-    await new Promise((r) => setTimeout(r, 200));
-    const result = await api("/api/settings/ticketing/test", { method: "POST" });
-    setStatus("ticket-status", `OK. ${JSON.stringify(result).slice(0, 180)}`);
+    await saveTicketing();
+    setStatus("ticket-status", "Saved.");
+    await loadSettings();
   } catch (err) {
     setStatus("ticket-status", String(err.message || err));
   }
 });
+
+document.getElementById("ticketing-test").addEventListener("click", async () => {
+  const provider = document.getElementById("ticketing-provider").value;
+  setStatus("ticket-status", "Saving…");
+  try {
+    await saveTicketing();
+    setStatus("ticket-status", "Testing…");
+    const result = await api(`/api/settings/ticketing/test?provider=${encodeURIComponent(provider)}`, { method: "POST" });
+    setStatus("ticket-status", formatProbeResult(result));
+    await loadSettings();
+  } catch (err) {
+    setStatus("ticket-status", String(err.message || err));
+  }
+});
+
+const TICKETING_TEST_HINTS = {
+  jira: "Jira: GET /rest/api/3/myself with the saved token.",
+  monday: "Monday.com: GraphQL me query with the API token in the password field.",
+  email: "Email: logs in, then sends a short message to the Username (or From / Hunt address).",
+  custom: "Internal CRM: GET the API path on the saved host.",
+};
+
+function syncTicketingTestButton() {
+  const provider = document.getElementById("ticketing-provider")?.value || "jira";
+  const btn = document.getElementById("ticketing-test");
+  if (btn) btn.textContent = provider === "email" ? "Send test email" : "Test connection";
+  const hint = document.getElementById("ticketing-test-hint");
+  if (hint) hint.textContent = TICKETING_TEST_HINTS[provider] || TICKETING_TEST_HINTS.jira;
+}
 
 const SMTP_PORT_HINTS = {
   plain: "Plain SMTP on port 25. Use STARTTLS (587) or SMTPS (465) when the relay requires encryption.",
@@ -1036,51 +1179,75 @@ document.getElementById("message-preview").addEventListener("click", async () =>
   }
 });
 
-document.getElementById("reset-system-btn").addEventListener("click", () => openResetModal());
+function bindWipeConfirm({ openBtnId, modalId, confirmId, cancelId, statusId, endpoint, pending, done }) {
+  const openBtn = document.getElementById(openBtnId);
+  const modal = document.getElementById(modalId);
+  const confirmBtn = document.getElementById(confirmId);
+  const cancelBtn = document.getElementById(cancelId);
+  if (!openBtn || !modal || !confirmBtn || !cancelBtn) return;
 
-const resetModal = document.getElementById("reset-modal");
-const resetConfirmBtn = document.getElementById("reset-modal-confirm");
-const resetCancelBtn = document.getElementById("reset-modal-cancel");
-
-function openResetModal() {
-  if (!resetModal) return;
-  resetModal.hidden = false;
-  resetConfirmBtn.disabled = false;
-  resetCancelBtn.disabled = false;
-  resetCancelBtn.focus();
-}
-
-function closeResetModal() {
-  if (!resetModal) return;
-  resetModal.hidden = true;
-}
-
-async function confirmSystemReset() {
-  resetConfirmBtn.disabled = true;
-  resetCancelBtn.disabled = true;
-  setStatus("wipe-status", "Resetting system tables…");
-  try {
-    const result = await api("/api/settings/reset-system", { method: "POST" });
-    const deleted = result.deleted || {};
-    closeResetModal();
-    setStatus(
-      "wipe-status",
-      `Reset complete. Deleted ${deleted.assets || 0} system row(s) and ${deleted.vulnerabilities || 0} CVE(s).`
-    );
-  } catch (err) {
-    resetConfirmBtn.disabled = false;
-    resetCancelBtn.disabled = false;
-    setStatus("wipe-status", String(err.message || err));
+  function openModal() {
+    modal.hidden = false;
+    modal.removeAttribute("hidden");
+    confirmBtn.disabled = false;
+    cancelBtn.disabled = false;
+    cancelBtn.focus();
   }
+
+  function closeModal() {
+    modal.hidden = true;
+    modal.setAttribute("hidden", "");
+    confirmBtn.disabled = false;
+    cancelBtn.disabled = false;
+  }
+
+  async function confirmWipe(ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    closeModal();
+    setStatus(statusId, pending);
+    openBtn.disabled = true;
+    try {
+      const result = await api(endpoint, { method: "POST" });
+      setStatus(statusId, done((result && result.deleted) || {}));
+    } catch (err) {
+      setStatus(statusId, String(err.message || err));
+    } finally {
+      openBtn.disabled = false;
+    }
+  }
+
+  openBtn.addEventListener("click", openModal);
+  cancelBtn.addEventListener("click", closeModal);
+  confirmBtn.addEventListener("click", confirmWipe);
+  modal.addEventListener("click", (ev) => {
+    if (ev.target === modal) closeModal();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !modal.hidden) closeModal();
+  });
 }
 
-resetCancelBtn.addEventListener("click", closeResetModal);
-resetConfirmBtn.addEventListener("click", confirmSystemReset);
-resetModal.addEventListener("click", (ev) => {
-  if (ev.target === resetModal) closeResetModal();
+bindWipeConfirm({
+  openBtnId: "reset-systems-btn",
+  modalId: "reset-systems-modal",
+  confirmId: "reset-systems-modal-confirm",
+  cancelId: "reset-systems-modal-cancel",
+  statusId: "wipe-systems-status",
+  endpoint: "/api/settings/reset-system",
+  pending: "Resetting Internal systems…",
+  done: (deleted) => `Reset complete. Deleted ${deleted.assets || 0} system row(s).`,
 });
-document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && resetModal && !resetModal.hidden) closeResetModal();
+
+bindWipeConfirm({
+  openBtnId: "reset-cves-btn",
+  modalId: "reset-cves-modal",
+  confirmId: "reset-cves-modal-confirm",
+  cancelId: "reset-cves-modal-cancel",
+  statusId: "wipe-cves-status",
+  endpoint: "/api/settings/wipe-cve-data",
+  pending: "Deleting Incoming CVEs…",
+  done: (deleted) => `Delete complete. Removed ${deleted.vulnerabilities || 0} CVE(s).`,
 });
 
 loadSettings()

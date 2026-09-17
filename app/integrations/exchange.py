@@ -115,6 +115,7 @@ class ExchangeClient:
                     "received": str(item.datetime_received),
                     "body": body,
                     "message_id": str(item.message_id or ""),
+                    "folder": folder_name or "Inbox",
                 }
             )
             item.is_read = True

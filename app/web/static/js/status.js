@@ -1,22 +1,23 @@
 let rows = [];
 
-const STAGE_LABELS = {
-  INGESTED: "Ingest",
-  EXTRACTED: "Extract",
-  ENRICHED: "Enrichment (NVD/EPSS)",
-  MATCHED: "Asset match (local inventory)",
-  ACTIONED: "Actioned",
-  AI_FALLBACK: "Targeted AI fallback",
-  FAILED: "Failed",
-};
-
 function runStatus(row) {
-  const status = pipelineStatus(row.status || row.pipeline_status);
-  if (status === "FAILED") return { cls: "st-error", label: "Failed (retry)" };
-  if (status === "AI_FALLBACK") return { cls: "st-paused", label: "Processing (AI)" };
-  if (status === "ACTIONED") return { cls: "st-ok", label: "Completed (success)" };
-  if (status === "MATCHED") return { cls: "st-ok", label: "Matched" };
-  return { cls: "st-syncing", label: "Processing" };
+  if (row.run === "failed" || row.filter_key === "failed") {
+    return { cls: "st-error", label: row.run_label || "Failed" };
+  }
+  if (row.waiting || row.run === "waiting") {
+    return { cls: "st-paused", label: row.run_label || "Waiting for intel" };
+  }
+  if (row.unmatched || row.run === "unmatched") {
+    return { cls: "st-paused", label: row.run_label || "Unmatched" };
+  }
+  if (row.run === "completed" || row.filter_key === "completed") {
+    return { cls: "st-ok", label: row.run_label || "Completed" };
+  }
+  return { cls: "st-syncing", label: row.run_label || "In flight" };
+}
+
+function filterKey(row) {
+  return row.filter_key || row.station || "";
 }
 
 function priorityEl(row) {
@@ -57,8 +58,7 @@ function renderTable() {
   const filtered = rows.filter((row) => {
     const hay = `${row.cve_id} ${row.source_name || ""} ${targetTeam(row)}`.toLowerCase();
     const okQ = !q || hay.includes(q);
-    const rowStatus = pipelineStatus(row.status || row.pipeline_status);
-    const okS = !status || rowStatus === status;
+    const okS = !status || filterKey(row) === status;
     return okQ && okS;
   });
   if (!filtered.length) {
@@ -67,7 +67,6 @@ function renderTable() {
   }
   tbody.replaceChildren();
   filtered.forEach((row) => {
-    const stage = pipelineStatus(row.status || row.pipeline_status);
     const run = runStatus(row);
     const href = `/vulnerabilities/${encodeURIComponent(row.cve_id)}`;
     const tr = useTemplate("tpl-status-row");
@@ -76,7 +75,7 @@ function renderTable() {
     link.href = href;
     link.textContent = row.cve_id;
     slot(tr, "source").textContent = dash(row.source_name);
-    slot(tr, "stage").textContent = STAGE_LABELS[stage] || stage;
+    slot(tr, "stage").textContent = row.station_label || row.station || "—";
     const runEl = labeledPill(run.cls, run.label);
     slot(tr, "run").replaceChildren(runEl);
     slot(tr, "priority").replaceChildren(priorityEl(row));
@@ -112,12 +111,18 @@ async function loadStatus() {
   rows = vulns;
   renderTable();
   renderIntegrations(integrations);
+  stampUpdated(true);
 }
 
 document.getElementById("table-search").addEventListener("input", renderTable);
 document.getElementById("status-filter").addEventListener("change", renderTable);
-document.getElementById("refresh-btn").addEventListener("click", loadStatus);
 loadStatus().catch((err) => {
+  stampUpdated(false);
   setEmptyRow(document.getElementById("vuln-tbody"), 7, `Failed to load status: ${err.message}`);
 });
-setInterval(loadStatus, 30000);
+setInterval(() => {
+  loadStatus().catch((err) => {
+    stampUpdated(false);
+    console.error(err);
+  });
+}, 30000);

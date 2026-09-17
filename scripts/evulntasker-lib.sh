@@ -59,7 +59,16 @@ evulntasker_backup_db() {
   mkdir -p "$dest_dir"
   local stamp
   stamp="$(date +%Y%m%d-%H%M%S)"
-  local url="${VULNINTEL_DATABASE_URL:-sqlite:///./data/evulntasker.db}"
+  local url="${EVULNTASKER_DATABASE_URL:-${VULNINTEL_DATABASE_URL:-}}"
+  if [[ -z "$url" ]]; then
+    if [[ -f "$prefix/data/evulntasker.db" ]]; then
+      url="sqlite:///./data/evulntasker.db"
+    elif [[ -f "$prefix/data/vulnintel.db" ]]; then
+      url="sqlite:///./data/vulnintel.db"
+    else
+      url="sqlite:///./data/evulntasker.db"
+    fi
+  fi
   local out
 
   if out="$(evulntasker_sqlite_path "$url" "$prefix")"; then
@@ -104,6 +113,18 @@ evulntasker_stop_service() {
   fi
 }
 
+evulntasker_env_key_exists() {
+  local file="$1" key="$2"
+  grep -qE "^${key}=" "$file" && return 0
+  local alt=""
+  case "$key" in
+    EVULNTASKER_*) alt="VULNINTEL_${key#EVULNTASKER_}" ;;
+    VULNINTEL_*) alt="EVULNTASKER_${key#VULNINTEL_}" ;;
+    *) return 1 ;;
+  esac
+  grep -qE "^${alt}=" "$file"
+}
+
 evulntasker_merge_env() {
   local example="$1"
   local target="$2"
@@ -113,7 +134,7 @@ evulntasker_merge_env() {
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
     key="${line%%=*}"
-    if ! grep -qE "^${key}=" "$target"; then
+    if ! evulntasker_env_key_exists "$target" "$key"; then
       printf '\n%s\n' "$line" >> "$target"
     fi
   done < "$example"

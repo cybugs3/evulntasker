@@ -19,7 +19,7 @@ DEFAULT_INTEL = [
         endpoint="https://services.nvd.nist.gov/rest/json/cves/2.0",
         enabled=False,
         sync_status="idle",
-        raw_count=280_000,
+        raw_count=0,
         notes="National Vulnerability Database 2.0 — CVSS, vendor, product, CWE.",
         config={"intel_managed": True},
     ),
@@ -29,7 +29,7 @@ DEFAULT_INTEL = [
         endpoint="https://api.first.org/data/v1/epss",
         enabled=False,
         sync_status="idle",
-        raw_count=280_000,
+        raw_count=0,
         notes="FIRST Exploit Prediction Scoring System — likelihood of exploitation.",
         config={"intel_managed": True},
     ),
@@ -220,7 +220,7 @@ def _sync_env(rows: list[VulnerabilityRepository]) -> None:
 
 
 def enabled_lookups(feed_type: str) -> list[dict[str, str]]:
-    """Enabled lookup endpoints. DB rows win; .env is used only when that type has no row."""
+    """Enabled lookup endpoints. DB enabled rows win; otherwise .env NVD/EPSS flags."""
     settings = get_settings()
     if not settings.enrichment_enabled:
         return []
@@ -229,18 +229,18 @@ def enabled_lookups(feed_type: str) -> list[dict[str, str]]:
     db = SessionLocal()
     try:
         rows = lookup_rows(db, feed_type)
-        if rows:
-            out: list[dict[str, str]] = []
-            for row in rows:
-                if not row.enabled or not (row.endpoint or "").strip():
-                    continue
-                out.append(
-                    {
-                        "name": row.name,
-                        "endpoint": row.endpoint.strip(),
-                        "api_key": str(_cfg(row).get("api_key") or ""),
-                    }
-                )
+        out: list[dict[str, str]] = []
+        for row in rows:
+            if not row.enabled or not (row.endpoint or "").strip():
+                continue
+            out.append(
+                {
+                    "name": row.name,
+                    "endpoint": row.endpoint.strip(),
+                    "api_key": str(_cfg(row).get("api_key") or ""),
+                }
+            )
+        if out:
             return out
     finally:
         db.close()

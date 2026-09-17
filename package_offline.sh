@@ -23,8 +23,9 @@ Usage: ./package_offline.sh [options]
   --skip-download  Reuse vendor/wheels instead of fetching from PyPI
   -h, --help       Show this help
 
-The ZIP contains application source, setup.sh, uninstall.sh, and
-vendor/wheels/*.whl (including aiosmtplib for Gmail Act tickets)
+The ZIP contains application source, setup.sh, uninstall.sh,
+README.md, FUNCTIONALITY.md, GAPS.md, and vendor/wheels/*.whl
+(including aiosmtplib for Gmail Act tickets)
 so the target can run:  sudo ./setup.sh --offline
 EOF
 }
@@ -123,7 +124,7 @@ copy_tree "$ROOT/vendor/wheels" "$STAGE/vendor/wheels"
 
 for f in app.py setup.sh setup-venv.sh uninstall.sh package_offline.sh \
          requirements.txt requirements.lock.txt alembic.ini pytest.ini \
-         README.md .env.example EVulnTasker-ICON.png; do
+         README.md FUNCTIONALITY.md GAPS.md .env.example EVulnTasker-ICON.png; do
   [[ -f "$ROOT/$f" ]] && cp -a "$ROOT/$f" "$STAGE/$f"
 done
 
@@ -172,9 +173,14 @@ Upgrade an existing install without wiping the database:
 
   sudo ./setup.sh --offline --upgrade
 
-Uninstall (keeps a database backup; Gmail App Password in .env is deleted, not backed up):
+Uninstall (keeps a database backup including Internal systems; Gmail App Password in .env is deleted, not backed up):
 
   sudo ./uninstall.sh --yes
+
+Docs in this tree: README.md, FUNCTIONALITY.md, GAPS.md (remaining work).
+
+CMDB / Sonatype / ITNM are not CVE pipeline steps. They teach the Internal
+systems catalog on a schedule (new equipment only) when a live host exists.
 
 Gmail Act tickets (optional). After install, edit /opt/evulntasker/.env:
 

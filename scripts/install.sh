@@ -96,7 +96,7 @@ User=${RUN_USER}
 Group=${RUN_GROUP}
 WorkingDirectory=${ROOT}
 Environment=PYTHONPATH=${ROOT}
-Environment=VULNINTEL_ENV=production
+Environment=EVULNTASKER_ENV=production
 EnvironmentFile=-${ROOT}/.env
 ExecStart=${ROOT}/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --log-level info
 Restart=on-failure

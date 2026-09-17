@@ -11,6 +11,9 @@ from app.services.repo_catalog import (
     atom_source,
     ensure_atom_feeds,
     purge_placeholder_repos,
+    ranked_repositories,
+    repository_cve_counts,
+    sync_source_repositories,
 )
 
 router = APIRouter()
@@ -25,6 +28,7 @@ class RepositoryOut(BaseModel):
     sync_status: str
     last_sync_at: datetime | None
     raw_count: int
+    cve_count: int = 0
     last_error: str | None
     notes: str
 
@@ -32,10 +36,16 @@ class RepositoryOut(BaseModel):
 
 
 @router.get("/repositories", response_model=list[RepositoryOut])
-def list_repositories(db: Session = Depends(get_db)) -> list[VulnerabilityRepository]:
+def list_repositories(db: Session = Depends(get_db)) -> list[RepositoryOut]:
     purge_placeholder_repos(db)
     ensure_atom_feeds(db)
-    return db.query(VulnerabilityRepository).order_by(VulnerabilityRepository.id).all()
+    sync_source_repositories(db)
+    rows = ranked_repositories(db.query(VulnerabilityRepository).all())
+    counts = repository_cve_counts(db, rows)
+    return [
+        RepositoryOut.model_validate(row).model_copy(update={"cve_count": counts.get(row.id, 0)})
+        for row in rows
+    ]
 
 
 @router.post("/repositories/{repo_id}/sync", response_model=RepositoryOut)
@@ -43,18 +53,44 @@ def sync_repository(repo_id: int, db: Session = Depends(get_db)) -> Vulnerabilit
     repo = db.get(VulnerabilityRepository, repo_id)
     if not repo:
         raise HTTPException(404, "Repository not found")
+    cfg = repo.config if isinstance(repo.config, dict) else {}
+    if cfg.get("source_managed"):
+        from app.models.source import InputSource
+
+        source = db.get(InputSource, cfg.get("source_id"))
+        if source is None:
+            raise HTTPException(404, "Source not found")
+        kind = repo.feed_type
+        try:
+            if kind == "local":
+                from app.api.settings.feeds import pull_local_files
+
+                pull_local_files(db, source)
+            elif kind == "smb":
+                from app.api.settings.feeds import pull_smb_files
+
+                pull_smb_files(db, source)
+            elif kind == "outlook":
+                from app.api.settings.feeds import pull_outlook
+
+                pull_outlook(db, source)
+            elif kind == "inline":
+                raise HTTPException(400, "Enter a CVE ID on Input Sources.")
+            else:
+                raise HTTPException(400, "This repository cannot sync from here.")
+        except ValueError as exc:
+            raise HTTPException(400, f"Sync failed: {exc}") from exc
+        sync_source_repositories(db)
+        db.refresh(repo)
+        return repo
     if repo.feed_type == ATOM_TYPE:
         from app.api.settings.feeds import pull_web_api
 
         source = atom_source(db)
         if source is None or not (source.config or {}):
             raise HTTPException(400, "Configure ATOM feeds in Settings → Feeds first.")
-        if not source.enabled:
-            raise HTTPException(409, "ATOM feeds are disabled in Settings → Feeds.")
-        if not repo.enabled:
-            raise HTTPException(409, "This feed is paused. Enable it first.")
         try:
-            pull_web_api(db, source, only_url=repo.endpoint)
+            pull_web_api(db, source, only_url=repo.endpoint, include_disabled=True)
         except ValueError as exc:
             raise HTTPException(400, f"Sync failed: {exc}") from exc
         db.refresh(repo)
@@ -72,7 +108,25 @@ def toggle_repository(repo_id: int, db: Session = Depends(get_db)) -> Vulnerabil
     repo = db.get(VulnerabilityRepository, repo_id)
     if not repo:
         raise HTTPException(404, "Repository not found")
+    cfg = repo.config if isinstance(repo.config, dict) else {}
+    if cfg.get("source_managed"):
+        from app.models.source import InputSource
+
+        source = db.get(InputSource, cfg.get("source_id"))
+        if source is None:
+            raise HTTPException(404, "Source not found")
+        source.enabled = not source.enabled
+        if not source.enabled:
+            source.last_error = None
+        db.commit()
+        sync_source_repositories(db)
+        db.refresh(repo)
+        return repo
     repo.enabled = not repo.enabled
+    from app.services.repo_catalog import sync_atom_channel_enabled
+
+    if repo.feed_type == ATOM_TYPE:
+        sync_atom_channel_enabled(db)
     db.commit()
     db.refresh(repo)
     return repo

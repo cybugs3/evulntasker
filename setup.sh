@@ -15,7 +15,7 @@ UPGRADE=0
 OPEN_FIREWALL=0
 NO_SERVICE=0
 PREFIX="/opt/evulntasker"
-PORT="${VULNINTEL_PORT:-8080}"
+PORT="${EVULNTASKER_PORT:-${VULNINTEL_PORT:-8080}}"
 RUN_USER="${SUDO_USER:-${USER:-root}}"
 
 usage() {
@@ -36,6 +36,9 @@ Fresh install (always installs to /opt/evulntasker and enables systemd unit evul
 
 Upgrade (schema is only applied additively; existing rows are kept):
   sudo ./setup.sh --offline --upgrade
+
+Docs copied with the install: README.md, FUNCTIONALITY.md, GAPS.md
+CMDB / Sonatype / ITNM are inventory teachers, not pipeline steps.
 EOF
 }
 
@@ -89,7 +92,8 @@ if [[ "$SRC" != "$PREFIX" ]]; then
   for item in app alembic scripts systemd tests app.py requirements.txt \
               requirements.lock.txt alembic.ini pytest.ini .env.example \
               EVulnTasker-ICON.png setup.sh setup-venv.sh uninstall.sh \
-              package_offline.sh INSTALL.txt PLATFORM.txt; do
+              package_offline.sh INSTALL.txt PLATFORM.txt \
+              README.md FUNCTIONALITY.md GAPS.md; do
     if [[ -e "$SRC/$item" ]]; then
       rm -rf "$PREFIX/$item"
       cp -a "$SRC/$item" "$PREFIX/$item"
@@ -227,7 +231,7 @@ User=${RUN_USER}
 Group=${RUN_GROUP}
 WorkingDirectory=${PREFIX}
 Environment=PYTHONPATH=${PREFIX}
-Environment=VULNINTEL_ENV=production
+Environment=EVULNTASKER_ENV=production
 EnvironmentFile=-${PREFIX}/.env
 ExecStart=${VENV}/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --log-level info
 Restart=on-failure
@@ -265,6 +269,9 @@ echo "  Dashboard:  http://127.0.0.1:${PORT}"
 echo "  Install:    $PREFIX"
 echo "  Config:     $PREFIX/.env"
 echo "  Data:       $PREFIX/data"
+echo "  Docs:       $PREFIX/README.md"
+echo "  Remaining:  $PREFIX/GAPS.md"
+echo "  Inventory:  Internal systems catalog (CMDB/Sonatype/ITNM teach it on a schedule; not pipeline steps)"
 echo "  Gmail Act:  set GMAIL_SENDER_EMAIL / GMAIL_APP_PASSWORD / GMAIL_RECEIVER_EMAIL in .env, then restart"
 [[ -x "$SRC/venv/bin/python" && "$SRC/venv" != "$VENV" ]] && \
   echo "  Dev venv:   $SRC/venv (aiosmtplib installed for python3 app.py)"

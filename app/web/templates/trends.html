@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Trends{% endblock %}
+{% block heading %}Trends{% endblock %}
+{% block lede %}CVEs ingested in each period, classified with the same Live Workflow rules as the rest of the app.{% endblock %}
+{% block actions %}
+  <div class="filters" id="trend-range" role="group" aria-label="Time range">
+    <button class="btn-ghost range-btn" type="button" data-range="24h">24 hours</button>
+    <button class="btn-ghost range-btn is-active" type="button" data-range="7d">7 days</button>
+    <button class="btn-ghost range-btn" type="button" data-range="30d">30 days</button>
+    <button class="btn-ghost range-btn" type="button" data-range="90d">90 days</button>
+  </div>
+  <span class="updated-stamp" id="page-updated">Updated —</span>
+{% endblock %}
+{% block content %}
+  <section class="main-hero" id="trend-kpis">
+    <div class="main-tile">
+      <div class="kpi-label">CVEs ingested</div>
+      <div class="kpi-value" data-k="ingested">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">CVEs matched</div>
+      <div class="kpi-value ok" data-k="matched">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Unmatched</div>
+      <div class="kpi-value danger" data-k="unmatched">—</div>
+    </div>
+    <div class="main-tile">
+      <div class="kpi-label">Match rate</div>
+      <div class="kpi-value" data-k="match_rate">—</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div class="panel-head-copy">
+        <h2>Ingested vs matched vs unmatched</h2>
+        <p class="muted" id="trend-caption">CVEs received in each period, classified as matched or unmatched using Live Workflow.</p>
+      </div>
+      <div class="chart-legend" aria-hidden="true">
+        <span class="legend-item"><span class="legend-swatch is-ingested"></span> CVEs ingested</span>
+        <span class="legend-item"><span class="legend-swatch is-matched"></span> Matched</span>
+        <span class="legend-item"><span class="legend-swatch is-unmatched"></span> Unmatched</span>
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <svg id="trend-bars" class="trend-chart" role="img" aria-labelledby="trend-bars-title trend-bars-desc"></svg>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div class="panel-head-copy">
+        <h2>Cumulative volume</h2>
+        <p class="muted">Running totals of the same Live Workflow classification.</p>
+      </div>
+      <div class="chart-legend" aria-hidden="true">
+        <span class="legend-item"><span class="legend-swatch is-ingested"></span> CVEs ingested</span>
+        <span class="legend-item"><span class="legend-swatch is-matched"></span> Matched</span>
+        <span class="legend-item"><span class="legend-swatch is-unmatched"></span> Unmatched</span>
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <svg id="trend-lines" class="trend-chart" role="img" aria-labelledby="trend-lines-title trend-lines-desc"></svg>
+    </div>
+  </section>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/trends.js?v={{ version }}-updated2"></script>
+{% endblock %}

@@ -145,10 +145,10 @@ async def test_enrich_cve_calls_ai_when_fields_already_present(monkeypatch):
             return {"summary": PLAIN}
 
     async def no_epss(self, *_args, **_kwargs):
-        return None
+        return None, None
 
     monkeypatch.setattr("app.pipeline.step3_enrich.AICopilot", lambda: FakeCopilot())
-    monkeypatch.setattr("app.pipeline.step3_enrich.EPSSClient.fetch", no_epss)
+    monkeypatch.setattr("app.pipeline.step3_enrich.EPSSClient.lookup", no_epss)
 
     db = _session()
     db.add(
@@ -197,10 +197,10 @@ async def test_enrich_cve_skips_ai_in_org_llm_mode(monkeypatch):
         raise AssertionError("AI must not run in org_llm mode")
 
     async def no_epss(self, *_args, **_kwargs):
-        return None
+        return None, None
 
     monkeypatch.setattr("app.pipeline.step3_enrich.AICopilot.enrich", boom)
-    monkeypatch.setattr("app.pipeline.step3_enrich.EPSSClient.fetch", no_epss)
+    monkeypatch.setattr("app.pipeline.step3_enrich.EPSSClient.lookup", no_epss)
 
     db = _session()
     vuln = Vulnerability(

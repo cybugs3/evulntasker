@@ -12,13 +12,13 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.integrations.exchange import ExchangeClient
 from app.integrations.gmail import gmail_configured, send_gmail_ticket
-from app.integrations.ticketing import get_ticketing_client
+from app.integrations.ticketing import get_ticketing_clients
 from app.integrations.siem import generate_detections
 from app.models.detection import DetectionArtifact
 from app.models.enums import PipelineStatus
 from app.models.jira import JiraTicket
 from app.models.vulnerability import Vulnerability
-from app.pipeline.state import begin_step, complete_step
+from app.pipeline.state import begin_step, complete_step, set_status
 from app.services.mail_templates import render_hunt, render_owner
 
 log = logging.getLogger(__name__)
@@ -152,6 +152,12 @@ def _store_detections(db: Session, vuln: Vulnerability, detections: dict[str, st
     )
 
 
+def _record_ticket(db: Session, vuln: Vulnerability, store: bool, **kwargs) -> None:
+    if not store or vuln.id is None:
+        return
+    db.add(JiraTicket(vulnerability_id=vuln.id, **kwargs))
+
+
 async def _open_email_owner_tasks(
     db: Session,
     vuln: Vulnerability,
@@ -159,12 +165,15 @@ async def _open_email_owner_tasks(
     owner_project: str,
     existing_assignees: set[str],
     fallback_email: str = "",
-):
+    *,
+    store: bool = True,
+) -> tuple[dict | None, list[dict]]:
     groups = _matched_owner_groups(vuln, fallback_email=fallback_email)
     last = None
+    issues: list[dict] = []
     if not groups:
         log.info("%s email ticketing — no Internal systems owner_email to notify", vuln.cve_id)
-        return None
+        return None, issues
     for group in groups:
         email = group["email"]
         if email.lower() in existing_assignees:
@@ -180,106 +189,179 @@ async def _open_email_owner_tasks(
             priority=payload["priority"],
             to=email,
         )
-        db.add(
-            JiraTicket(
-                vulnerability_id=vuln.id,
-                ticket_key=_mail_ticket_key("owner", email),
-                ticket_type="owner",
-                url=last["url"],
-                assignee=email[:128],
-                summary=f"{vuln.cve_id} owner action · {email}",
-                dry_run=last["dry_run"],
-                raw_response=str(last.get("raw") or {}),
-            )
+        key = last.get("key") or _mail_ticket_key("owner", email)
+        issues.append(
+            {
+                "provider": "email",
+                "type": "owner",
+                "key": key,
+                "url": last.get("url"),
+                "dry_run": last.get("dry_run"),
+                "assignee": email,
+            }
+        )
+        _record_ticket(
+            db,
+            vuln,
+            store,
+            ticket_key=key[:32],
+            ticket_type="owner",
+            url=last["url"],
+            assignee=email[:128],
+            summary=f"{vuln.cve_id} owner action · {email}",
+            dry_run=last["dry_run"],
+            raw_response=_pack_ticket_raw("email", last.get("raw")),
         )
         existing_assignees.add(email.lower())
-    return last
+    return last, issues
 
 
-async def take_action(db: Session, vuln: Vulnerability) -> None:
-    begin_step(db, vuln, PipelineStatus.ACTIONED, f"Action started for {vuln.cve_id}")
+def _projects_for(settings, provider: str) -> tuple[str, str]:
+    if provider == "custom":
+        return settings.custom_owner_project, settings.custom_hunt_project
+    if provider == "monday":
+        board = settings.monday_board_id or "BOARD"
+        return board, board
+    if provider == "email":
+        return "MAIL", "MAIL"
+    return settings.jira_project_key, settings.jira_hunt_project_key
+
+
+def _ticket_channel(ticket) -> str:
+    raw = ticket.raw_response or ""
+    key = ticket.ticket_key or ""
+    if '"provider": "email"' in raw or key.startswith("MAIL-"):
+        return "email"
+    if '"provider": "monday"' in raw or key.startswith("MON-"):
+        return "monday"
+    if '"provider": "custom"' in raw:
+        return "custom"
+    return "jira"
+
+
+def _pack_ticket_raw(provider: str, raw: dict | None) -> str:
+    return str({"provider": provider, "raw": raw or {}})
+
+
+async def take_action(
+    db: Session,
+    vuln: Vulnerability,
+    *,
+    audit: bool = True,
+    store: bool = True,
+) -> dict:
+    """Open tickets according to Settings.
+
+    ``audit=False`` skips AuditLog / pipeline-run documentation and does not commit.
+    ``store=False`` still talks to ticketing providers but does not write ticket/detection rows.
+    """
+    if audit:
+        begin_step(db, vuln, PipelineStatus.ACTIONED, f"Action started for {vuln.cve_id}")
     settings = get_settings()
     payload = _owner_payload(vuln)
     detections = generate_detections(vuln)
-    _store_detections(db, vuln, detections)
+    if store:
+        _store_detections(db, vuln, detections)
 
-    existing_types = {ticket.ticket_type for ticket in vuln.tickets}
-    ticketing = get_ticketing_client(settings)
-    provider = (settings.ticketing_provider or "jira").lower()
-    if provider == "custom":
-        owner_project = settings.custom_owner_project
-        hunt_project = settings.custom_hunt_project
-    elif provider == "monday":
-        owner_project = settings.monday_board_id or "BOARD"
-        hunt_project = settings.monday_board_id or "BOARD"
-    elif provider == "email":
-        owner_project = "MAIL"
-        hunt_project = "MAIL"
-    else:
-        owner_project = settings.jira_project_key
-        hunt_project = settings.jira_hunt_project_key
+    clients = get_ticketing_clients(settings)
     owner_issue = hunt_issue = None
+    issues: list[dict] = []
     hunt_to = (settings.ticketing_hunt_email or "").strip()
 
-    if provider == "email":
-        owner_issue = await _open_email_owner_tasks(
-            db,
-            vuln,
-            ticketing,
-            owner_project,
-            existing_assignees={
-                (ticket.assignee or "").strip().lower()
-                for ticket in vuln.tickets
-                if ticket.ticket_type == "owner"
-            },
-            fallback_email=settings.ticketing_fallback_owner_email,
+    for provider, ticketing in clients:
+        owner_project, hunt_project = _projects_for(settings, provider)
+        has_owner = any(
+            ticket.ticket_type == "owner" and _ticket_channel(ticket) == provider
+            for ticket in vuln.tickets
         )
-    elif "owner" not in existing_types:
-        payload = _owner_payload(vuln)
-        owner_subject, owner_body = render_owner(vuln, payload)
-        owner_issue = await ticketing.create_issue(
-            project_key=owner_project,
-            summary=owner_subject or f"[{payload['priority']}] {vuln.cve_id} — {payload['product'] or 'unknown product'}",
-            description=owner_body or _owner_description(vuln, payload),
-            assignee=payload["username"],
-            labels=["evulntasker", "owner-action", (vuln.severity or "unknown").lower()],
-            priority=payload["priority"],
+        has_hunt = any(
+            ticket.ticket_type in {"threat_hunt", "hunt"} and _ticket_channel(ticket) == provider
+            for ticket in vuln.tickets
         )
-        db.add(
-            JiraTicket(
-                vulnerability_id=vuln.id,
+
+        if provider == "email":
+            owner_issue, email_issues = await _open_email_owner_tasks(
+                db,
+                vuln,
+                ticketing,
+                owner_project,
+                existing_assignees={
+                    (ticket.assignee or "").strip().lower()
+                    for ticket in vuln.tickets
+                    if ticket.ticket_type == "owner" and _ticket_channel(ticket) == "email"
+                },
+                fallback_email=settings.ticketing_fallback_owner_email,
+                store=store,
+            )
+            issues.extend(email_issues)
+        elif not has_owner:
+            payload = _owner_payload(vuln)
+            owner_subject, owner_body = render_owner(vuln, payload)
+            owner_issue = await ticketing.create_issue(
+                project_key=owner_project,
+                summary=owner_subject or f"[{payload['priority']}] {vuln.cve_id} — {payload['product'] or 'unknown product'}",
+                description=owner_body or _owner_description(vuln, payload),
+                assignee=payload["username"],
+                labels=["evulntasker", "owner-action", (vuln.severity or "unknown").lower()],
+                priority=payload["priority"],
+            )
+            issues.append(
+                {
+                    "provider": provider,
+                    "type": "owner",
+                    "key": owner_issue.get("key"),
+                    "url": owner_issue.get("url"),
+                    "dry_run": owner_issue.get("dry_run"),
+                    "assignee": payload["username"],
+                }
+            )
+            _record_ticket(
+                db,
+                vuln,
+                store,
                 ticket_key=owner_issue["key"],
                 ticket_type="owner",
                 url=owner_issue["url"],
                 assignee=payload["username"],
                 summary=f"{vuln.cve_id} owner action",
                 dry_run=owner_issue["dry_run"],
-                raw_response=str(owner_issue.get("raw") or {}),
+                raw_response=_pack_ticket_raw(provider, owner_issue.get("raw")),
             )
-        )
 
-    if "threat_hunt" not in existing_types:
-        hunt_subject, hunt_body = render_hunt(vuln, detections)
-        hunt_issue = await ticketing.create_issue(
-            project_key=hunt_project,
-            summary=hunt_subject or f"[HUNT] {vuln.cve_id} — Sigma/SIEM detections",
-            description=hunt_body or _hunt_description(vuln, detections),
-            labels=["evulntasker", "threat-hunting", (vuln.severity or "unknown").lower()],
-            priority=payload["priority"],
-            **({"to": hunt_to} if provider == "email" else {}),
-        )
-        db.add(
-            JiraTicket(
-                vulnerability_id=vuln.id,
-                ticket_key=_mail_ticket_key("hunt", hunt_to) if provider == "email" else hunt_issue["key"],
+        skip_email_hunt = provider == "email" and not hunt_to
+        if not has_hunt and not skip_email_hunt:
+            hunt_subject, hunt_body = render_hunt(vuln, detections)
+            hunt_issue = await ticketing.create_issue(
+                project_key=hunt_project,
+                summary=hunt_subject or f"[HUNT] {vuln.cve_id} — Sigma/SIEM detections",
+                description=hunt_body or _hunt_description(vuln, detections),
+                labels=["evulntasker", "threat-hunting", (vuln.severity or "unknown").lower()],
+                priority=payload["priority"],
+                **({"to": hunt_to} if provider == "email" else {}),
+            )
+            hunt_key = _mail_ticket_key("hunt", hunt_to) if provider == "email" else hunt_issue["key"]
+            issues.append(
+                {
+                    "provider": provider,
+                    "type": "threat_hunt",
+                    "key": hunt_key,
+                    "url": hunt_issue.get("url"),
+                    "dry_run": hunt_issue.get("dry_run"),
+                    "assignee": hunt_to or "threat-hunting",
+                }
+            )
+            _record_ticket(
+                db,
+                vuln,
+                store,
+                ticket_key=hunt_key,
                 ticket_type="threat_hunt",
                 url=hunt_issue["url"],
                 assignee=(hunt_to[:128] if hunt_to else "threat-hunting"),
                 summary=f"{vuln.cve_id} threat hunting",
                 dry_run=hunt_issue["dry_run"],
-                raw_response=str(hunt_issue.get("raw") or {}),
+                raw_response=_pack_ticket_raw(provider, hunt_issue.get("raw")),
             )
-        )
 
     owner_key = (owner_issue or {}).get("key") if owner_issue else "existing"
     hunt_key = (hunt_issue or {}).get("key") if hunt_issue else "existing"
@@ -289,7 +371,7 @@ async def take_action(db: Session, vuln: Vulnerability) -> None:
         f"Hunting ticket: {hunt_key}\n\n"
         f"{_owner_description(vuln, payload)}"
     )
-    if provider != "email":
+    if any(name != "email" for name, _client in clients):
         try:
             ExchangeClient().send(
                 to=list({payload["email"], "threat-hunting@example.com"}),
@@ -305,10 +387,16 @@ async def take_action(db: Session, vuln: Vulnerability) -> None:
         except Exception:
             log.exception("Failed to send Gmail ticket for %s", vuln.cve_id)
 
-    complete_step(
-        db,
-        vuln,
-        PipelineStatus.ACTIONED,
-        f"Opened owner/hunt tickets and generated detections for {vuln.cve_id}",
-        {"owner_ticket": owner_key, "hunt_ticket": hunt_key},
+    opened = [name for name, _client in clients]
+    message = (
+        f"Opened owner/hunt tickets via {', '.join(opened)} and generated detections for {vuln.cve_id}"
+        if opened
+        else f"No ticketing provider enabled — detections generated for {vuln.cve_id}"
     )
+    details = {"owner_ticket": owner_key, "hunt_ticket": hunt_key, "providers": opened}
+    if audit:
+        complete_step(db, vuln, PipelineStatus.ACTIONED, message, details)
+    elif store:
+        set_status(db, vuln, PipelineStatus.ACTIONED)
+    return {**details, "issues": issues, "message": message}
+

@@ -20,7 +20,9 @@ from app.utils.jsonutil import jsonable
 
 log = logging.getLogger(__name__)
 
-# Keep the legacy string column in sync with the dashboard filters.
+# Compatibility string column. Live Workflow is the operator-facing classifier;
+# these values exist so old filters and waiting-intel retries keep working.
+WAITING_ENRICHMENT = "waiting_enrichment"
 _DASHBOARD_STATUS = {
     PipelineStatus.INGESTED: "ingested",
     PipelineStatus.EXTRACTED: "extracting",
@@ -30,6 +32,24 @@ _DASHBOARD_STATUS = {
     PipelineStatus.AI_FALLBACK: "enriching",
     PipelineStatus.FAILED: "failed",
 }
+
+
+def dashboard_for(status: PipelineStatus, *, waiting: bool = False) -> str:
+    if waiting:
+        return WAITING_ENRICHMENT
+    return _DASHBOARD_STATUS.get(status, "ingested")
+
+
+def apply_status(
+    vuln: Vulnerability,
+    status: PipelineStatus,
+    *,
+    waiting: bool = False,
+) -> None:
+    """Write ``status`` and ``pipeline_status`` together so they cannot drift."""
+    vuln.status = status
+    if hasattr(vuln, "pipeline_status"):
+        vuln.pipeline_status = dashboard_for(status, waiting=waiting)
 
 
 def pick(obj: Any, *names: str, default: Any = None) -> Any:
@@ -66,11 +86,14 @@ def write_audit(
     return entry
 
 
-def set_status(db: Session, vuln: Vulnerability, status: PipelineStatus) -> None:
-    vuln.status = status
-    dashboard = _DASHBOARD_STATUS.get(status)
-    if dashboard and hasattr(vuln, "pipeline_status"):
-        vuln.pipeline_status = dashboard
+def set_status(
+    db: Session,
+    vuln: Vulnerability,
+    status: PipelineStatus,
+    *,
+    waiting: bool = False,
+) -> None:
+    apply_status(vuln, status, waiting=waiting)
     db.add(vuln)
 
 
