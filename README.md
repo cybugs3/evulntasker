@@ -1,16 +1,186 @@
 # EVulnTasker v1.0 Beta
 
-**Elizarov Vulnrabilities Tasking Manager Platform**
+**Elizarov Vulnerabilities Tasking Manager Platform**
 
-AI-Powered RBVM — Risk-Based Vulnerability Management for Linux (RHEL / Ubuntu).
+EVulnTasker is a Linux appliance for risk-based vulnerability tasking. It watches how CVE intelligence arrives in the organization (a local inbox folder, SMB shares, an Exchange mailbox, or ATOM/RSS feeds), pulls out CVE IDs and product identity, optionally asks NVD and FIRST EPSS for scores, and then compares that identity to a local **Internal systems** catalog. When a row matches, the Act step opens owner and threat-hunting work: Jira, Monday.com, SMTP email, or an internal CRM, plus Sigma/SIEM hunt text from the same pass.
 
-EVulnTasker ingests CVE intelligence from files, mail, and ATOM feeds, extracts identifiers, optionally enriches from NVD/EPSS, matches vendor/product against a local Internal systems catalog, and opens owner and threat-hunting tasks (Jira, Monday.com, email, or an internal CRM). Sigma rules and SIEM hunting queries are generated in the same Act step.
+The product is meant for a single RHEL or Ubuntu host. One systemd service (`evulntasker`) runs the HTTP UI, the pipeline worker, and the pollers. Matching never calls CMDB, Sonatype, or ITNM per CVE; those systems only teach the local catalog on a schedule. The UI is **English only**. This phase stays on **HTTP port 8080** (no TLS). Leave `EVULNTASKER_BASIC_AUTH_*` blank for an open lab, or set both to get a browser Basic Auth prompt without changing the port.
 
-The user interface is **English only**. There is no login.
+Open `http://127.0.0.1:8080` after install. Module detail: [`FUNCTIONALITY.md`](FUNCTIONALITY.md). Remaining gaps: [`GAPS.md`](GAPS.md). Lab risk survey: [`PT-RISK-SURVEY.md`](PT-RISK-SURVEY.md).
 
-Default URL after start: `http://127.0.0.1:8080` (service bind `0.0.0.0:8080`).
+---
 
-A Hebrew module catalog lives in [`FUNCTIONALITY.md`](FUNCTIONALITY.md). Remaining work is listed in [`GAPS.md`](GAPS.md).
+## Open source libraries
+
+EVulnTasker is a Python 3.11+ application. These are the third-party Open Source packages from `requirements.txt` (BSD / MIT / Apache-2.0 / PSF and similar licenses — see each project).
+
+| Library | License (typical) | What EVulnTasker uses it for |
+|---------|-------------------|------------------------------|
+| **FastAPI** | MIT | REST API under `/api` and the ASGI app |
+| **Uvicorn** | BSD-3 | Production HTTP server (systemd `ExecStart`) |
+| **Starlette** | BSD-3 | Middleware, static files, request/response |
+| **Jinja2** | BSD-3 | English HTML dashboard and mail HTML |
+| **python-multipart** | Apache-2.0 | Form and CSV uploads |
+| **orjson** | Apache-2.0 / MIT | Fast JSON encode/decode |
+| **Pydantic** | MIT | Request bodies and Settings models |
+| **pydantic-settings** | MIT | Load `.env` / `EVULNTASKER_*` |
+| **SQLAlchemy 2** | MIT | ORM (SQLite or PostgreSQL) |
+| **Alembic** | MIT | Schema migrations when `alembic/versions` exists |
+| **psycopg2-binary** | LGPL-3.0 | PostgreSQL driver (skipped on Python 3.14) |
+| **greenlet** | MIT | SQLAlchemy async/greenlet support |
+| **httpx** | BSD-3 | NVD, EPSS, ATOM, Jira, inventory, AI HTTP |
+| **aiohttp** | Apache-2.0 | Extra async HTTP client |
+| **APScheduler** | MIT | Timed Local / SMB / Outlook / ATOM / inventory polls |
+| **exchangelib** | BSD-2 | On-prem Exchange / Outlook ingest |
+| **aiosmtplib** | MIT | SMTP relay and Gmail Act mail |
+| **smbprotocol** | MIT | SMB/CIFS file ingest (AD/LDAP account) |
+| **python-dateutil** | BSD-3 / Apache-2.0 | CVE / feed date parsing |
+| **tenacity** | Apache-2.0 | NVD/EPSS retries |
+| **structlog** | MIT / Apache-2.0 | Structured pipeline logs |
+| **Celery** + **Redis** | BSD-3 / MIT | Optional multi-node workers (not required on one host) |
+| **pytest** / **pytest-asyncio** | MIT | Test suite |
+
+SQLite ships with Python. PostgreSQL is optional and installed separately if you switch **Settings → Database**.
+
+---
+
+## Install from scratch
+
+Default production path: **`/opt/evulntasker`**. Systemd unit: **`evulntasker`**. URL: **`http://127.0.0.1:8080`**.
+
+Need **Python 3.11+** (3.12 / 3.13 / 3.14 are fine; `psycopg2-binary` is skipped on 3.14), **git**, **sudo**, and **systemd**. On RHEL use AppStream `python3.11` (and `python3.11-venv` if you run the tree without `setup.sh`).
+
+### 1. Clone
+
+```bash
+git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker
+cd evulntasker
+```
+
+If you received a copy of the tree (USB, share) instead of git, `cd` into that directory. The rest of the steps are the same: you must be in the folder that contains `setup.sh`, `app.py`, and `app/`.
+
+### 2. Online install
+
+The target host can reach PyPI. From the cloned tree:
+
+```bash
+sudo ./setup.sh
+```
+
+That copies the application to `/opt/evulntasker`, creates a venv, installs wheels from the internet, writes `.env` from `.env.example` (mode `600`), applies the schema, and enables `evulntasker.service` on HTTP `:8080`.
+
+Useful flags:
+
+```bash
+sudo ./setup.sh --port 8080          # default; stays HTTP, no TLS
+sudo ./setup.sh --prefix /opt/evulntasker
+sudo ./setup.sh --user evulntasker   # service account (default: the sudo user)
+sudo ./setup.sh --no-service         # files only; start with python3 app.py
+# sudo ./setup.sh --open-firewall    # firewalld TCP 8080 — lab LAN only; prefer Basic Auth first
+```
+
+Open `http://127.0.0.1:8080`. On first boot edit `/opt/evulntasker/.env` if you want HTTP Basic:
+
+```bash
+# /opt/evulntasker/.env
+EVULNTASKER_BASIC_AUTH_USER=lab
+EVULNTASKER_BASIC_AUTH_PASSWORD=change-me
+sudo systemctl restart evulntasker
+```
+
+Leave those two keys blank to keep the lab UI open.
+
+### 3. Offline install (air-gapped)
+
+Two machines: a **build host with internet**, and a **target with no internet**.
+
+**On the build host**
+
+```bash
+git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker
+cd evulntasker
+./package_offline.sh
+```
+
+That downloads wheels into `vendor/wheels` and writes `dist/EVulnTasker-offline-<arch>-py<ver>-<date>.zip` (source, `setup.sh`, docs, wheels). Optional: `./package_offline.sh --python python3.11 --output dist`.
+
+Copy the ZIP to the target (USB, scp, and so on).
+
+**On the target**
+
+```bash
+unzip EVulnTasker-offline-*.zip
+cd EVulnTasker-offline-*
+sudo ./setup.sh --offline
+```
+
+`--offline` installs only from `vendor/wheels`. It does not call PyPI. The result is the same layout: `/opt/evulntasker`, systemd unit, HTTP `:8080`.
+
+### 4. After a fresh install (online or offline)
+
+```bash
+sudo systemctl status evulntasker
+sudo journalctl -u evulntasker -f
+```
+
+Browser: `http://127.0.0.1:8080` (LAN: `http://<host-ip>:8080`). Health: `GET /healthz`. `/docs` is hidden when `EVULNTASKER_ENV=production` (the systemd unit sets that).
+
+Then in the UI:
+
+1. **Internal systems** — add products or import CSV (`/api/inventory/template.csv`). CMDB / Sonatype / ITNM are optional later teachers.
+2. **Settings → Feeds → Local** — a folder on this Linux host under an allowed root (`/tmp`, `/var/evulntasker`, `/opt/evulntasker/inbox`, `data/inbox`). Enable the feed on **Input Sources**, then Sync now.
+3. **Settings → Enrichment / Internet intel** — turn NVD/EPSS on only if lookups should run.
+4. **Settings → AI modules** — leave off if the organization must not call an LLM.
+5. **Settings → Ticketing** — Enable Email / Jira / Monday / CRM as needed. Optional **Allowed recipient domains**. Edit **Message** templates.
+6. Watch **Live Workflow**, **Incoming CVEs**, and **Actions**.
+
+Local inbox extra roots: `EVULNTASKER_LOCAL_INGEST_ALLOW` in `.env`. After any Python change under `app/`:
+
+```bash
+sudo systemctl restart evulntasker
+```
+
+Hard-refresh the browser (Ctrl+Shift+R) after UI changes.
+
+### 5. Upgrade (keeps the database)
+
+From a new clone or unzipped offline tree that already has wheels:
+
+```bash
+# online host
+cd evulntasker
+sudo ./setup.sh --upgrade
+
+# air-gapped host
+cd EVulnTasker-offline-*
+sudo ./setup.sh --offline --upgrade
+```
+
+Schema is additive. Existing CVE and catalog rows stay. A DB backup is taken first (default `/var/backups/evulntasker`).
+
+### 6. Uninstall
+
+```bash
+sudo ./uninstall.sh --yes
+```
+
+Stops `evulntasker` (and leftover `vaict` / `vulnintel` units), copies the database (Incoming CVEs + Internal systems) aside, then deletes the install and `.env`. Gmail, SMTP, and Basic Auth secrets are **not** in that backup.
+
+### 7. Optional: run from the clone without systemd
+
+For a laptop or a checkout that should not touch `/opt`:
+
+```bash
+git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker
+cd evulntasker
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt          # online
+# pip install --no-index --find-links vendor/wheels -r requirements.txt   # after package_offline.sh
+cp .env.example .env
+python3 app.py
+```
+
+Still HTTP `http://127.0.0.1:8080`.
 
 ---
 
@@ -55,9 +225,9 @@ Sidebar groups:
 - **Debugger** — walk a CVE through every stage using live Settings. Each stage explains what ran, who matched and why (or why not), and who would be notified. Nothing is stored and nothing is sent
 - **Settings** — database, reset, feeds, enrichment, intel, AI, inventory teachers (CMDB / Sonatype / ITNM), ticketing, message layout
 
-CVE detail (`/vulnerabilities/{cve_id}`): description, matches, tickets, hunting pack, audit trail, **Re-run pipeline**.
+CVE detail (`/vulnerabilities/{cve_id}`): description, matches, tickets, hunting pack, audit trail, **Re-run pipeline** (Live Workflow) and **Run debugger** (dry-run only).
 
-Health check: `GET /healthz`.
+Health check: `GET /healthz` (always unauthenticated). `/docs`, `/redoc`, and `/openapi.json` are served only when `EVULNTASKER_ENV` is not `production`.
 
 ---
 
@@ -72,7 +242,7 @@ Health check: `GET /healthz`.
 | **Internet intel** | NVD / EPSS lookup URLs, per-source **Enable lookup**, optional API keys. **Ignore CVEs published before** (`INTEL_START_DATE`) applies to **every ingest path**: Local, SMB, Outlook/Exchange, ATOM, inline CVE, webhooks, and the Debugger. A CVE already stored can still be enriched by ID |
 | **AI modules** | Global Enable / Disable (`AI_ENABLED`). When on, pick one provider (Gemini, ChatGPT, Azure OpenAI, GitHub Copilot) and a mode (see below) |
 | **Inventory** | CMDB / ITNM teach Internal systems on a schedule (typically 24 hours, new equipment only). Sonatype IQ also harvests on Enable save (apps + libraries from the latest report). They are not pipeline steps. Matching always reads the local catalog (`INVENTORY_SYNC_ENABLED` defaults off until a live host exists) |
-| **Ticketing** | Separate Enable for Jira, Monday.com, Email (SMTP), Internal CRM. Hunt **Permanent email**; fallback owner email only when Internal systems `owner_email` is blank |
+| **Ticketing** | Separate Enable for Jira, Monday.com, Email (SMTP), Internal CRM. Hunt **Permanent email**; fallback owner email only when Internal systems `owner_email` is blank. Optional **Allowed recipient domains** (blank = any domain) |
 | **Message** | Owner and hunt subject/body templates (`{{cve_id}}`, `{{summary}}`, …). Used even when AI is off |
 
 ### AI modes (only when AI is enabled)
@@ -90,7 +260,7 @@ Health check: `GET /healthz`.
 
 | Source | Notes |
 |-------|--------|
-| **Local folder** | Path on the EVulnTasker **Linux host**, not on the analyst PC. `.txt`, HTML, CSV, JSON, logs. Each file is kept as an Extraction ingest event, including files that add only one new CVE or whose IDs were already known. Subject to `INTEL_START_DATE` |
+| **Local folder** | Path on the EVulnTasker **Linux host**, not on the analyst PC. Must sit under an allowed inbox root (`/tmp`, `/var/evulntasker`, `/opt/evulntasker/inbox`, `data/inbox`, plus `EVULNTASKER_LOCAL_INGEST_ALLOW`). `.txt`, HTML, CSV, JSON, logs. Each file is kept as an Extraction ingest event, including files that add only one new CVE or whose IDs were already known. Subject to `INTEL_START_DATE` |
 | **SMB / CIFS** | One or more locations, shared AD/LDAP account. Subject to `INTEL_START_DATE` |
 | **Outlook / Exchange** | On-prem unread mail scanned for CVE IDs. Subject to `INTEL_START_DATE` |
 | **ATOM / RSS** | Seeded on install (CISA, Ubuntu, Microsoft MSRC, Exploit-DB). Subject to `INTEL_START_DATE` |
@@ -112,31 +282,6 @@ Optional: Celery + Redis for multi-node workers (not required on a single host).
 Data store: **SQLite** for first install, **PostgreSQL** for production (`Settings → Database`).
 
 If a ticketing provider is enabled but not configured, that provider stores a **dry-run** ticket (pipeline still completes). Missing AI keys are not dry-run — the LLM is simply skipped.
-
----
-
-## Python stack
-
-Requires **Python 3.11+** (3.12 / 3.13 / 3.14 are supported; `psycopg2-binary` is skipped on 3.14).
-
-### Third-party packages (`requirements.txt`)
-
-| Package | Role |
-|---------|------|
-| **FastAPI** / **Uvicorn** / **Starlette** | HTTP API and ASGI server |
-| **Jinja2** / **python-multipart** | HTML UI and forms |
-| **orjson** | Fast JSON |
-| **Pydantic** / **pydantic-settings** | Validation and `.env` |
-| **SQLAlchemy 2** / **Alembic** | ORM and migrations |
-| **psycopg2-binary** | PostgreSQL (Python &lt; 3.14) |
-| **httpx** / **aiohttp** | NVD, EPSS, Jira, Monday, AI, inventory APIs |
-| **APScheduler** | Timed polling |
-| **exchangelib** | Exchange / Outlook |
-| **aiosmtplib** | SMTP mail relay |
-| **smbprotocol** | SMB/CIFS |
-| **python-dateutil** / **tenacity** / **structlog** | Dates, NVD/EPSS retries, structured logs |
-| **Celery** + **Redis** | Optional distributed workers |
-| **pytest** / **pytest-asyncio** | Tests |
 
 ### Application packages (`app/`)
 
@@ -173,109 +318,24 @@ Requires **Python 3.11+** (3.12 / 3.13 / 3.14 are supported; `psycopg2-binary` i
 ├── uninstall.sh
 ├── README.md
 ├── FUNCTIONALITY.md
-└── GAPS.md                     # Remaining work
+├── GAPS.md                     # Remaining work
+└── PT-RISK-SURVEY.md           # Lab risk survey (HTTP :8080)
 ```
 
 Do **not** commit `venv/`, `.env`, `data/`, `logs/`, or `vendor/wheels/`.
 
 ---
 
-## Quick start (development)
-
-```bash
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-python3 app.py
-```
-
-Then open `http://127.0.0.1:8080`.
-
-Typical first-run path:
-
-1. **Internal systems** — add products or import CSV (`/api/inventory/template.csv`). CMDB / Sonatype / ITNM are optional later teachers, not required for matching.
-2. **Settings → Feeds → Local** — folder on this server. Enable the feed on **Input Sources**, then Sync now (or drop a `.txt` with `CVE-YYYY-NNNNN`).
-3. **Settings → Enrichment** — Enable only if NVD/EPSS should run; turn lookup sources on under **Internet intel**.
-4. **Settings → AI modules** — Disable if the organization must not call an LLM.
-5. **Settings → Ticketing** — Enable Jira / Monday / Email / CRM as needed. Edit **Message** templates.
-6. Watch **Extraction → Incoming CVEs → Status → Actions**.
-
-Health: `GET /healthz`.
-
----
-
-## Production install (Linux)
-
-Default install path: **`/opt/evulntasker`**. A systemd unit named **`evulntasker`** is enabled.
-
-### Online
-
-```bash
-sudo ./setup.sh
-```
-
-### Offline (air-gapped)
-
-On a machine with internet:
-
-```bash
-./package_offline.sh
-```
-
-Copy `dist/EVulnTasker-offline-*.zip` to the target, unzip, then:
-
-```bash
-sudo ./setup.sh --offline
-```
-
-### Upgrade (keeps the existing database)
-
-```bash
-sudo ./setup.sh --offline --upgrade
-```
-
-Schema changes are applied additively (`create_all` / Alembic). Existing rows are not wiped. A DB backup is taken first.
-
-After changing Python under `app/`, restart:
-
-```bash
-sudo systemctl restart evulntasker
-```
-
-Static JS/CSS is cache-busted; use a hard refresh (Ctrl+Shift+R) after UI changes.
-
-### Service
-
-```bash
-sudo systemctl start evulntasker
-sudo systemctl stop evulntasker
-sudo systemctl restart evulntasker
-sudo systemctl status evulntasker
-sudo journalctl -u evulntasker -f
-```
-
-### Uninstall
-
-```bash
-sudo ./uninstall.sh --yes
-```
-
-Removes the application and the `evulntasker` unit (also stops leftover `vaict` / `vulnintel` units if present). A copy of the database — including the Internal systems catalog — is left under `/var/backups/evulntasker`. `.env` secrets (including `GMAIL_APP_PASSWORD`) are wiped and are not in that backup.
-
----
-
-## Remaining work
-
-See [`GAPS.md`](GAPS.md). Highest priority: login if the port is exposed beyond a lab.
-
 ## Configuration
 
-Copy `.env.example` to `.env`. Most operator knobs are also saved from Settings. Runtime keys use `EVULNTASKER_*`; `VULNINTEL_*` from older installs is still read.
+Copy `.env.example` to `.env` (or let `setup.sh` do it). Most operator knobs are also saved from Settings. Runtime keys use `EVULNTASKER_*`; `VULNINTEL_*` from older installs is still read.
 
 | Variable | Purpose |
 |----------|---------|
-| `EVULNTASKER_ENV` | `development` / `staging` / `production` |
-| `EVULNTASKER_HOST` / `EVULNTASKER_PORT` | Bind address (default `0.0.0.0:8080`) |
+| `EVULNTASKER_ENV` | `development` / `staging` / `production` (production hides `/docs`) |
+| `EVULNTASKER_HOST` / `EVULNTASKER_PORT` | Bind address (default `0.0.0.0:8080`, HTTP) |
+| `EVULNTASKER_BASIC_AUTH_USER` / `EVULNTASKER_BASIC_AUTH_PASSWORD` | Optional HTTP Basic. Blank = open UI. `/healthz` and `/api/webhooks/{token}` stay open |
+| `EVULNTASKER_LOCAL_INGEST_ALLOW` | Extra Local-folder roots (comma-separated). Defaults already include `/tmp` and `/var/evulntasker` |
 | `EVULNTASKER_DATABASE_URL` | SQLite or `postgresql+psycopg2://…` |
 | `ENRICHMENT_ENABLED` | Off = skip NVD/EPSS and AI rewrite; still match and act |
 | `INTEL_START_DATE` | Skip ingest for CVEs before this date (YYYY-MM-DD). Applies to Local, SMB, mail, ATOM, inline, webhooks, and Debugger |
@@ -289,6 +349,7 @@ Copy `.env.example` to `.env`. Most operator knobs are also saved from Settings.
 | `SMTP_RELAY_*` | Settings → Ticketing → Email |
 | `TICKETING_HUNT_EMAIL` | Permanent hunt mailbox (blank = skip) |
 | `TICKETING_FALLBACK_OWNER_EMAIL` | Only if the matched system has no `owner_email` |
+| `TICKETING_EMAIL_DOMAINS` | Comma-separated domains allowed for owner/hunt mail (blank = any) |
 | `JIRA_*` / `MONDAY_*` / `CUSTOM_*` | Provider endpoints and projects |
 | `EXCHANGE_*` | Outlook ingest (also stored on the Outlook source) |
 | `CMDB_*` / `SONATYPE_*` / `ITNM_*` | Inventory teachers: sample the network and insert new equipment into Internal systems. Not used per CVE |
@@ -309,6 +370,12 @@ On a host whose system Python cannot import the venv wheels (for example 3.14 vs
 
 ---
 
+## Remaining work
+
+See [`GAPS.md`](GAPS.md). This phase stays on **HTTP :8080** (no TLS). For a host that is more than a closed lab, set `EVULNTASKER_BASIC_AUTH_USER` / `EVULNTASKER_BASIC_AUTH_PASSWORD` and do **not** pass `--open-firewall` unless that prompt is on. A full login page and roles are still outstanding.
+
+---
+
 ## License
 
-Use and redistribute according to your organization's policy. Add a `LICENSE` file before publishing if you intend an open-source release.
+Use and redistribute according to your organization's policy. Add a `LICENSE` file before publishing if you intend an open-source release. Third-party packages keep their own licenses (table above).

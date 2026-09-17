@@ -58,6 +58,34 @@ def test_linux_kernel_cve_matches_redhat_linux_type():
     assert [row[0].id for row in hits] == [asset.id]
 
 
+def test_linux_kernel_cve_does_not_match_windows_or_glibc():
+    db = _session()
+    linux = _asset()
+    windows = _asset(
+        name="windows_11",
+        vendor="microsoft",
+        product="windows_11",
+        system_type="os",
+        version="24H2",
+    )
+    glibc = _asset(
+        name="glibc",
+        vendor="gnu",
+        product="glibc",
+        system_type="code_library",
+        version="2.39",
+    )
+    vuln = _vuln()
+    db.add_all([linux, windows, glibc, vuln])
+    db.commit()
+    db.refresh(vuln)
+
+    assert not is_linux_asset(windows)
+    assert not is_linux_asset(glibc)
+    hits = match_local_assets(db, vuln)
+    assert [row[0].product for row in hits] == ["Enterprise Linux"]
+
+
 def test_linux_kernel_cve_does_not_match_apache():
     db = _session()
     asset = _asset(

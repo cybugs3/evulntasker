@@ -83,7 +83,6 @@ LINUX_VENDORS = frozenset(
         "alma",
         "almalinux",
         "rocky",
-        "gnu",
     }
 )
 LINUX_PRODUCTS = frozenset(
@@ -105,18 +104,14 @@ LINUX_PRODUCTS = frozenset(
         "rocky linux",
     }
 )
+# Asset/CVE type "os" is not Linux — Windows catalog rows use it.
 LINUX_TYPES = frozenset(
     {
         "linux",
-        "os",
-        "operating system",
-        "operating-system",
-        "operating_system",
         "unix",
-        "server os",
-        "server-os",
     }
 )
+_WINDOWS_HINTS = ("windows", "win32", "win64", "microsoft windows")
 LINUX_HINTS = (
     "linux",
     "rhel",
@@ -179,9 +174,17 @@ def is_linux_cve(vuln: Vulnerability) -> bool:
     return "linux kernel" in hay
 
 
+def _is_windows_blob(vendor: str, product: str, stype: str, hay: str) -> bool:
+    if "windows" in product or any(hint in hay for hint in _WINDOWS_HINTS):
+        return True
+    return vendor in {"microsoft", "ms"} and stype in {"os", "operating system", "operating-system", "operating_system"}
+
+
 def is_linux_asset(asset: Asset) -> bool:
     vendor, product, stype = _norm(asset.vendor), _norm(asset.product), _norm(asset.system_type)
     hay = _blob(vendor, product, stype)
+    if _is_windows_blob(vendor, product, stype, hay):
+        return False
     if stype in LINUX_TYPES:
         return True
     if vendor in LINUX_VENDORS:

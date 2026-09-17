@@ -173,10 +173,9 @@ def apply_display_name(db: Session, source: InputSource, requested: str, key: st
     source.name = name
 
 
-def public_source(source: InputSource, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+def public_source_config(source: InputSource) -> dict[str, Any]:
+    """Source config for API responses — passwords and tokens removed."""
     cfg = dict(source.config or {})
-    password_set = bool(cfg.get("password"))
-    token_set = bool(cfg.get("token"))
     cfg.pop("password", None)
     cfg.pop("token", None)
     cfg.pop("seen", None)
@@ -187,7 +186,6 @@ def public_source(source: InputSource, extra: dict[str, Any] | None = None) -> d
 
         feeds = public_feeds(source.config or {})
         cfg["feeds"] = feeds
-        token_set = token_set or any(row.get("token_set") for row in feeds)
         if feeds:
             cfg["url"] = feeds[0]["url"]
     if source.source_type == "smb" or "locations" in cfg:
@@ -199,6 +197,16 @@ def public_source(source: InputSource, extra: dict[str, Any] | None = None) -> d
             cfg["server"] = locations[0]["server"]
             cfg["share"] = locations[0]["share"]
             cfg["path"] = locations[0]["path"]
+    return cfg
+
+
+def public_source(source: InputSource, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    cfg = dict(source.config or {})
+    password_set = bool(cfg.get("password"))
+    token_set = bool(cfg.get("token"))
+    cfg = public_source_config(source)
+    if source.source_type == "web_api" or "feeds" in (source.config or {}):
+        token_set = token_set or any(row.get("token_set") for row in cfg.get("feeds") or [])
     out = {
         "enabled": source.enabled,
         "password_set": password_set,

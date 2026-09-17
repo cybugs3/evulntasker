@@ -134,7 +134,7 @@
           <label>Folder path on this server
             <input class="input" id="local-path" placeholder="/var/evulntasker/inbox" />
           </label>
-          <p class="muted">Must be a real folder on the EVulnTasker Linux host (not a path on your PC). Test path checks the value in this field.</p>
+          <p class="muted">Must be a real folder on the EVulnTasker Linux host (not a path on your PC). Allowed roots: <code>/tmp</code>, <code>/var/evulntasker</code>, <code>/opt/evulntasker/inbox</code>, and <code>data/inbox</code>. Add another root with <code>EVULNTASKER_LOCAL_INGEST_ALLOW</code>. Test path checks the value in this field.</p>
           <label>Poll interval (seconds) <input class="input" id="local-poll" type="number" min="15" value="60" /></label>
           <div class="filters">
             <button class="btn" type="submit">Save</button>
@@ -528,6 +528,10 @@
               <span class="muted">Only if a matched system has no owner email. Leave blank to skip.</span>
             </label>
           </div>
+          <label>Allowed recipient domains
+            <input class="input" id="ticket-email-domains" placeholder="corp.local, gmail.com" />
+            <span class="muted">Comma-separated. Leave blank to send to any owner_email. When set, owner and hunt mail outside these domains is skipped.</span>
+          </label>
         </div>
         <div class="subtab-panel" data-subpanel="custom" data-group="ticketing">
           <label>API path <input class="input" id="custom-api-path" placeholder="/api/tickets" value="/api/tickets" /></label>

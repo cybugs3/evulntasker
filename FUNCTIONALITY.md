@@ -1,6 +1,6 @@
 # קטלוג פונקציונליות — EVulnTasker
 
-**EVulnTasker** (Elizarov Vulnrabilities Tasking Manager Platform) היא מערכת RBVM (ניהול פגיעויות מבוסס סיכון) לשרת Linux. היא קולטת מודיעין CVE מקבצים, דוא"ל ופידי ATOM, מחלצת מזהים, מעשירה לפי בחירה מ-NVD/EPSS, מתאימה vendor/product לקטלוג **Internal systems** המקומי, ופותחת משימות לבעלי נכסים ולצוות ציד (Jira, Monday.com, דוא"ל או CRM פנימי). באותו שלב Act נוצרים גם חוקי Sigma ושאילתות SIEM.
+**EVulnTasker** (Elizarov Vulnerabilities Tasking Manager Platform) היא מערכת RBVM (ניהול פגיעויות מבוסס סיכון) לשרת Linux. היא קולטת מודיעין CVE מקבצים, דוא"ל ופידי ATOM, מחלצת מזהים, מעשירה לפי בחירה מ-NVD/EPSS, מתאימה vendor/product לקטלוג **Internal systems** המקומי, ופותחת משימות לבעלי נכסים ולצוות ציד (Jira, Monday.com, דוא"ל או CRM פנימי). באותו שלב Act נוצרים גם חוקי Sigma ושאילתות SIEM.
 
 הממשק **באנגלית בלבד**. אין מסך התחברות.
 

@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     secret_key: str = Field(
         default="change-me-in-production", validation_alias=app_env_choices("SECRET_KEY")
     )
+    basic_auth_user: str = Field(default="", validation_alias=app_env_choices("BASIC_AUTH_USER"))
+    basic_auth_password: str = Field(
+        default="", validation_alias=app_env_choices("BASIC_AUTH_PASSWORD")
+    )
+    local_ingest_allow: str = Field(
+        default="", validation_alias=app_env_choices("LOCAL_INGEST_ALLOW")
+    )
     host: str = Field(default="0.0.0.0", validation_alias=app_env_choices("HOST"))
     port: int = Field(default=8080, validation_alias=app_env_choices("PORT"))
     log_level: str = Field(default="INFO", validation_alias=app_env_choices("LOG_LEVEL"))
@@ -122,6 +129,7 @@ class Settings(BaseSettings):
     ticketing_fallback_owner_email: str = Field(
         default="", alias="TICKETING_FALLBACK_OWNER_EMAIL"
     )
+    ticketing_email_domains: str = Field(default="", alias="TICKETING_EMAIL_DOMAINS")
 
     smtp_relay_host: str = Field(default="", alias="SMTP_RELAY_HOST")
     smtp_relay_port: int = Field(default=25, alias="SMTP_RELAY_PORT")

@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 # Build a ZIP that can be installed on a Linux target with no internet.
-# This host MAY use the network to download Python wheels once.
+# Run this on a build host AFTER a git clone. This host MAY use the network
+# to download Python wheels once.
 #
+#   git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker
+#   cd evulntasker
 #   ./package_offline.sh
 #   ./package_offline.sh --python python3.11 --output dist
+#
+# Copy dist/EVulnTasker-offline-*.zip to the air-gapped host, unzip, then:
+#   sudo ./setup.sh --offline
+#
+# Full steps: README.md → Install from scratch → Offline install.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -18,15 +26,29 @@ usage() {
   cat <<'EOF'
 Usage: ./package_offline.sh [options]
 
+Run this on a build host that can reach PyPI, from a git clone:
+
+  git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker
+  cd evulntasker
+  ./package_offline.sh
+
   --python EXE     Python used to resolve and download wheels (default: auto)
   --output DIR     Where to write the ZIP (default: ./dist)
   --skip-download  Reuse vendor/wheels instead of fetching from PyPI
   -h, --help       Show this help
 
 The ZIP contains application source, setup.sh, uninstall.sh,
-README.md, FUNCTIONALITY.md, GAPS.md, and vendor/wheels/*.whl
-(including aiosmtplib for Gmail Act tickets)
-so the target can run:  sudo ./setup.sh --offline
+README.md, FUNCTIONALITY.md, GAPS.md, PT-RISK-SURVEY.md, and vendor/wheels/*.whl
+(including aiosmtplib for Gmail Act tickets).
+
+On the air-gapped target (no internet):
+
+  unzip EVulnTasker-offline-*.zip
+  cd EVulnTasker-offline-*
+  sudo ./setup.sh --offline
+
+The service listens on HTTP :8080 (no TLS). Optional Basic Auth is in .env.
+See README.md → Install from scratch.
 EOF
 }
 
@@ -124,7 +146,7 @@ copy_tree "$ROOT/vendor/wheels" "$STAGE/vendor/wheels"
 
 for f in app.py setup.sh setup-venv.sh uninstall.sh package_offline.sh \
          requirements.txt requirements.lock.txt alembic.ini pytest.ini \
-         README.md FUNCTIONALITY.md GAPS.md .env.example EVulnTasker-ICON.png; do
+         README.md FUNCTIONALITY.md GAPS.md PT-RISK-SURVEY.md .env.example EVulnTasker-ICON.png; do
   [[ -f "$ROOT/$f" ]] && cp -a "$ROOT/$f" "$STAGE/$f"
 done
 
@@ -150,34 +172,57 @@ gmail_smtp=aiosmtplib
 EOF
 
 cat > "$STAGE/INSTALL.txt" <<'EOF'
-EVulnTasker — offline install on Linux
-================================
+EVulnTasker — install from scratch (offline ZIP)
+================================================
 
-This ZIP includes the application and every Python wheel.
-The target server does not need internet access.
+This ZIP is the air-gapped half of the install. How it was built (build host
+with internet):
 
-On the target:
+  git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker
+  cd evulntasker
+  ./package_offline.sh
+
+Online install (no ZIP) is: clone, then sudo ./setup.sh. See README.md.
+
+On this target (no internet required):
 
   unzip EVulnTasker-offline-*.zip
   cd EVulnTasker-offline-*
   sudo ./setup.sh --offline
 
-That installs to /opt/evulntasker and enables the systemd service:
+That copies the tree to /opt/evulntasker, creates the venv from vendor/wheels,
+writes .env (mode 600), and enables systemd unit evulntasker on HTTP :8080.
 
-  sudo systemctl start evulntasker
-  sudo systemctl stop evulntasker
-  sudo systemctl restart evulntasker
   sudo systemctl status evulntasker
+  sudo journalctl -u evulntasker -f
 
-Upgrade an existing install without wiping the database:
+Open http://127.0.0.1:8080 then:
+
+  1. Internal systems — add products or import CSV
+  2. Settings → Feeds → Local — folder on this Linux host
+  3. Input Sources — Enable / Sync now
+  4. Settings → Ticketing / Message as needed
+
+Upgrade without wiping the database:
 
   sudo ./setup.sh --offline --upgrade
 
-Uninstall (keeps a database backup including Internal systems; Gmail App Password in .env is deleted, not backed up):
+Uninstall (keeps a database backup including Internal systems; .env secrets
+including Gmail App Password, SMTP, and Basic Auth are deleted, not backed up):
 
   sudo ./uninstall.sh --yes
 
-Docs in this tree: README.md, FUNCTIONALITY.md, GAPS.md (remaining work).
+Docs in this tree: README.md, FUNCTIONALITY.md, GAPS.md, PT-RISK-SURVEY.md.
+
+The service binds HTTP :8080 (no TLS). Production sets EVULNTASKER_ENV=production
+and hides /docs. Optional HTTP Basic (no login page):
+
+  EVULNTASKER_BASIC_AUTH_USER=lab
+  EVULNTASKER_BASIC_AUTH_PASSWORD=change-me
+
+Leave those blank for an open lab UI. Local folder ingest is limited to
+/tmp, /var/evulntasker, /opt/evulntasker/inbox, and data/inbox
+(add roots with EVULNTASKER_LOCAL_INGEST_ALLOW).
 
 CMDB / Sonatype / ITNM are not CVE pipeline steps. They teach the Internal
 systems catalog on a schedule (new equipment only) when a live host exists.
@@ -223,6 +268,13 @@ PY
 
 evulntasker_ok "Bundle ready: $ZIP ($WHEEL_COUNT wheels)"
 echo
-echo "Copy to the target Linux host, then:"
+echo "Build host (already done if you ran this after git clone):"
+echo "  git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker && cd evulntasker && ./package_offline.sh"
+echo
+echo "Copy to the air-gapped Linux target, then:"
 echo "  unzip $(basename "$ZIP")"
 echo "  cd $NAME && sudo ./setup.sh --offline"
+echo "  open http://127.0.0.1:8080"
+echo
+echo "Online path (no ZIP): git clone … && cd evulntasker && sudo ./setup.sh"
+echo "Full steps: README.md → Install from scratch"

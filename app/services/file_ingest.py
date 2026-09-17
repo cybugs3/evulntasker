@@ -32,23 +32,77 @@ TEXT_SUFFIXES = {
 }
 MAX_FILE_BYTES = 20 * 1024 * 1024
 _WINDOWS_PATH = re.compile(r"^[A-Za-z]:[\\/]|^\\\\")
+DEFAULT_LOCAL_ROOTS = (
+    Path("/tmp"),
+    Path("/var/evulntasker"),
+    Path("/opt/evulntasker/inbox"),
+    Path("./data/inbox"),
+)
 
 
-def local_folder(raw: str | None) -> Path:
-    """Resolve a local ingest folder on this host. Raises ValueError if unusable."""
+def local_ingest_roots() -> list[Path]:
+    roots: list[Path] = []
+    seen: set[str] = set()
+    extras = ""
+    try:
+        from app.config import get_settings
+
+        extras = get_settings().local_ingest_allow or ""
+    except Exception:
+        extras = ""
+    parts = [str(path) for path in DEFAULT_LOCAL_ROOTS]
+    parts.extend(re.split(r"[,:]", extras))
+    for raw in parts:
+        text = (raw or "").strip()
+        if not text:
+            continue
+        try:
+            resolved = Path(text).expanduser().resolve()
+        except OSError:
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(resolved)
+    return roots
+
+
+def _resolve_local_path(raw: str | None) -> Path:
     text = (raw or "").strip().strip('"').strip("'")
     if not text:
         raise ValueError("Enter a folder path on this EVulnTasker server.")
-    folder = Path(text).expanduser()
     if _WINDOWS_PATH.match(text) or "\\" in text:
         raise ValueError(
             "That looks like a Windows path. Use a Linux folder on the EVulnTasker server, "
             "for example /var/evulntasker/inbox."
         )
+    folder = Path(text).expanduser()
     try:
-        folder = folder.resolve(strict=False)
+        return folder.resolve(strict=False)
     except OSError:
-        pass
+        return folder
+
+
+def ensure_local_folder_allowed(raw: str | None) -> Path:
+    folder = _resolve_local_path(raw)
+    roots = local_ingest_roots()
+    for root in roots:
+        try:
+            folder.relative_to(root)
+            return folder
+        except ValueError:
+            continue
+    allowed = ", ".join(str(root) for root in roots) or "/var/evulntasker/inbox"
+    raise ValueError(
+        f"Folder must be under an allowed inbox root ({allowed}). "
+        "Add another root with EVULNTASKER_LOCAL_INGEST_ALLOW if needed."
+    )
+
+
+def local_folder(raw: str | None) -> Path:
+    """Resolve a local ingest folder on this host. Raises ValueError if unusable."""
+    folder = ensure_local_folder_allowed(raw)
     if not folder.exists():
         raise ValueError(
             f"Folder not found on this server: {folder}. "

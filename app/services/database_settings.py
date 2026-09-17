@@ -170,6 +170,9 @@ def write_database_url(url: str) -> None:
             out.append("")
         out.append(f"{ENV_KEY}={url}")
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    from app.utils.file_perms import restrict_private_file
+
+    restrict_private_file(path)
     os.environ[ENV_KEY] = url
     if found_legacy:
         os.environ[LEGACY_ENV_KEY] = url
@@ -201,6 +204,9 @@ def write_env_values(updates: dict[str, str]) -> None:
                 out.append("")
             out.append(f"{key}={value}")
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    from app.utils.file_perms import restrict_private_file
+
+    restrict_private_file(path)
     os.environ.update(clean)
     get_settings.cache_clear()
 

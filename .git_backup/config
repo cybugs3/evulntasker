@@ -1,0 +1,5 @@
+[remote "origin"]
+	url = git@github.com:cybugs3/evulntasker.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[http]
+	postBuffer = 524288000

@@ -113,6 +113,9 @@ def poll_api_feeds() -> None:
                 continue
             try:
                 url = apply_nvd_window(url)
+                from app.utils.outbound_url import assert_http_url
+
+                assert_http_url(url)
                 response = httpx.get(url, timeout=30.0, headers=_feed_headers(source))
                 response.raise_for_status()
                 payload = response.json()

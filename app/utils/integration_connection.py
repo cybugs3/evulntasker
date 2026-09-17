@@ -75,6 +75,9 @@ async def probe_connection(conn: IntegrationConnection, path: str = "/") -> dict
     if not base:
         raise ValueError("Host or URL is required")
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
+    from app.utils.outbound_url import assert_http_url
+
+    assert_http_url(url)
     headers = {"User-Agent": "EVulnTasker/1.0", "Accept": "application/json", **conn.auth_headers()}
     auth = conn.auth_basic()
     async with httpx.AsyncClient(timeout=20.0, verify=conn.httpx_verify()) as client:

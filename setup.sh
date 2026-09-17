@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Install or upgrade EVulnTasker on a Linux host.
+# Install or upgrade EVulnTasker on a Linux host (HTTP :8080, no TLS).
 #
-#   sudo ./setup.sh                  # online install to /opt/evulntasker + systemd
-#   sudo ./setup.sh --offline        # no internet; uses vendor/wheels
+# From a git clone (or a copied tree that contains setup.sh + app/):
+#
+#   git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker && cd evulntasker
+#   sudo ./setup.sh                     # online — PyPI
+#   sudo ./setup.sh --offline           # air-gapped — vendor/wheels from package_offline.sh
+#   sudo ./setup.sh --upgrade           # keep .env and database
 #   sudo ./setup.sh --offline --upgrade
+#
+# Full steps: README.md → Install from scratch.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -22,22 +28,42 @@ usage() {
   cat <<'EOF'
 Usage: ./setup.sh [options]
 
+Run this from a git clone (or an unzipped offline ZIP). You must be in the
+directory that contains setup.sh, app.py, and app/.
+
+  git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker
+  cd evulntasker
+
+Online (this host can reach PyPI):
+
+  sudo ./setup.sh
+
+Offline (this host has vendor/wheels from ./package_offline.sh):
+
+  sudo ./setup.sh --offline
+
+Options:
+
   --offline           Install from vendor/wheels (no internet)
   --upgrade           Update code and Python packages; keep .env and database
   --prefix DIR        Install location (default: /opt/evulntasker)
-  --port N            HTTP port (default: 8080)
+  --port N            HTTP port (default: 8080, no TLS)
   --user NAME         Service account (default: sudo user)
   --no-service        Do not install a systemd unit
-  --open-firewall     Open TCP port in firewalld if present
+  --open-firewall     Open TCP port in firewalld if present (HTTP, no TLS)
   -h, --help          Show this help
 
-Fresh install (always installs to /opt/evulntasker and enables systemd unit evulntasker):
-  sudo ./setup.sh --offline
+Upgrade (schema is additive; existing rows are kept):
 
-Upgrade (schema is only applied additively; existing rows are kept):
+  sudo ./setup.sh --upgrade
   sudo ./setup.sh --offline --upgrade
 
-Docs copied with the install: README.md, FUNCTIONALITY.md, GAPS.md
+Installs to /opt/evulntasker and enables systemd unit evulntasker on HTTP :8080.
+Production sets EVULNTASKER_ENV=production (hides /docs).
+Optional HTTP Basic: EVULNTASKER_BASIC_AUTH_USER / EVULNTASKER_BASIC_AUTH_PASSWORD in .env.
+Local inbox roots: /tmp, /var/evulntasker, /opt/evulntasker/inbox, data/inbox.
+
+Docs copied with the install: README.md, FUNCTIONALITY.md, GAPS.md, PT-RISK-SURVEY.md
 CMDB / Sonatype / ITNM are inventory teachers, not pipeline steps.
 EOF
 }
@@ -93,7 +119,7 @@ if [[ "$SRC" != "$PREFIX" ]]; then
               requirements.lock.txt alembic.ini pytest.ini .env.example \
               EVulnTasker-ICON.png setup.sh setup-venv.sh uninstall.sh \
               package_offline.sh INSTALL.txt PLATFORM.txt \
-              README.md FUNCTIONALITY.md GAPS.md; do
+              README.md FUNCTIONALITY.md GAPS.md PT-RISK-SURVEY.md; do
     if [[ -e "$SRC/$item" ]]; then
       rm -rf "$PREFIX/$item"
       cp -a "$SRC/$item" "$PREFIX/$item"
@@ -123,6 +149,13 @@ if gmail_key_set GMAIL_SENDER_EMAIL && gmail_key_set GMAIL_APP_PASSWORD && gmail
   evulntasker_ok "Gmail Act tickets enabled (smtp.gmail.com:587 STARTTLS)"
 else
   evulntasker_warn "Gmail Act tickets are off until GMAIL_SENDER_EMAIL, GMAIL_APP_PASSWORD, and GMAIL_RECEIVER_EMAIL are set in $PREFIX/.env (use a Google App Password, not the account password)"
+fi
+
+if grep -qE '^EVULNTASKER_BASIC_AUTH_USER=.+' "$PREFIX/.env" 2>/dev/null \
+  && grep -qE '^EVULNTASKER_BASIC_AUTH_PASSWORD=.+' "$PREFIX/.env" 2>/dev/null; then
+  evulntasker_ok "HTTP Basic Auth is on (browser prompt on :${PORT})"
+else
+  evulntasker_warn "HTTP Basic Auth is off — UI on :${PORT} is open to the LAN. Set EVULNTASKER_BASIC_AUTH_USER and EVULNTASKER_BASIC_AUTH_PASSWORD in $PREFIX/.env to enable a prompt without TLS"
 fi
 
 if [[ "$UPGRADE" -eq 1 ]]; then
@@ -211,6 +244,15 @@ chown -R "$RUN_USER:$RUN_GROUP" "$PREFIX"
 if [[ -d "$SRC/venv" && "$SRC/venv" != "$VENV" ]]; then
   chown -R "$RUN_USER:$RUN_GROUP" "$SRC/venv" || true
 fi
+if [[ -f "$PREFIX/.env" ]]; then
+  chmod 600 "$PREFIX/.env" || true
+fi
+chmod 700 "$PREFIX/data" 2>/dev/null || true
+shopt -s nullglob
+for db in "$PREFIX/data"/*.db "$PREFIX/data"/*.sqlite "$PREFIX/data"/*.sqlite3; do
+  chmod 600 "$db" || true
+done
+shopt -u nullglob
 
 # --- systemd unit: evulntasker ---
 if [[ "$NO_SERVICE" -eq 1 ]]; then
@@ -221,7 +263,7 @@ else
   UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
   cat > "$UNIT" <<EOF
 [Unit]
-Description=EVulnTasker — Elizarov Vulnrabilities Tasking Manager Platform
+Description=EVulnTasker — Elizarov Vulnerabilities Tasking Manager Platform
 After=network-online.target
 Wants=network-online.target
 
@@ -255,7 +297,8 @@ if [[ "$OPEN_FIREWALL" -eq 1 ]]; then
   if command -v firewall-cmd >/dev/null 2>&1; then
     firewall-cmd --permanent --add-port="${PORT}/tcp"
     firewall-cmd --reload
-    evulntasker_ok "firewalld opened TCP $PORT"
+    evulntasker_ok "firewalld opened TCP $PORT (HTTP, no TLS)"
+    evulntasker_warn "That exposes the UI on the LAN. Set EVULNTASKER_BASIC_AUTH_* in .env unless this host is a closed lab"
   else
     evulntasker_warn "firewalld not found; skip --open-firewall"
   fi
@@ -264,13 +307,16 @@ fi
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo
 evulntasker_ok "EVulnTasker is ready"
-echo "  Dashboard:  http://127.0.0.1:${PORT}"
+echo "  Dashboard:  http://127.0.0.1:${PORT}  (HTTP, no TLS)"
 [[ -n "$HOST_IP" ]] && echo "  LAN:        http://${HOST_IP}:${PORT}"
 echo "  Install:    $PREFIX"
-echo "  Config:     $PREFIX/.env"
+echo "  Config:     $PREFIX/.env  (mode 600)"
 echo "  Data:       $PREFIX/data"
 echo "  Docs:       $PREFIX/README.md"
 echo "  Remaining:  $PREFIX/GAPS.md"
+echo "  Risk survey:$PREFIX/PT-RISK-SURVEY.md"
+echo "  Auth:       optional HTTP Basic via EVULNTASKER_BASIC_AUTH_* (blank = open lab)"
+echo "  Local inbox:/tmp, /var/evulntasker, /opt/evulntasker/inbox, data/inbox"
 echo "  Inventory:  Internal systems catalog (CMDB/Sonatype/ITNM teach it on a schedule; not pipeline steps)"
 echo "  Gmail Act:  set GMAIL_SENDER_EMAIL / GMAIL_APP_PASSWORD / GMAIL_RECEIVER_EMAIL in .env, then restart"
 [[ -x "$SRC/venv/bin/python" && "$SRC/venv" != "$VENV" ]] && \
@@ -282,4 +328,12 @@ echo "    sudo systemctl stop ${SERVICE_NAME}"
 echo "    sudo systemctl restart ${SERVICE_NAME}"
 echo "    sudo systemctl status ${SERVICE_NAME}"
 echo "    sudo journalctl -u ${SERVICE_NAME} -f"
+echo
+echo "  First run (same for online and offline):"
+echo "    1. Open http://127.0.0.1:${PORT}"
+echo "    2. Internal systems — add products or import CSV"
+echo "    3. Settings → Feeds → Local — folder under /tmp, /var/evulntasker, /opt/evulntasker/inbox, or data/inbox"
+echo "    4. Input Sources — Enable / Sync now"
+echo "    5. Settings → Ticketing / Message as needed"
+echo "  Full clone + install steps: $PREFIX/README.md (Install from scratch)"
 [[ "$UPGRADE" -eq 1 ]] && echo "  Existing database was kept (backup under ${BACKUP_DIR:-/var/backups/evulntasker})"

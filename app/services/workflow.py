@@ -231,7 +231,7 @@ def workflow_progress(
         and cursor is not None
         and cursor >= 3
     )
-    terminal = (current is None and column == "act") or unmatched
+    terminal = (current is None and column == "act") or unmatched or failed
     return {
         "done": done,
         "current": current,
@@ -865,7 +865,7 @@ def count_workflow_states(classified: list[dict[str, Any]]) -> dict[str, Any]:
             unmatched += 1
         if progress.get("current") is None:
             completed += 1
-        if progress.get("current") and not progress.get("terminal"):
+        if progress.get("current") and not progress.get("terminal") and not progress.get("failed"):
             inflight += 1
             current = progress["current"]
             if current in stations:
@@ -882,7 +882,7 @@ def count_workflow_states(classified: list[dict[str, Any]]) -> dict[str, Any]:
             matched += 1
         if progress.get("current") == "match" and not progress.get("unmatched"):
             matching_live += 1
-        if progress.get("current") == "act":
+        if progress.get("current") == "act" and not progress.get("failed"):
             acting_live += 1
         if "act" in done and progress.get("current") is None:
             actioned += 1
@@ -944,12 +944,19 @@ def build_workflow_snapshot(db: Session, limit: int = 80) -> dict[str, Any]:
                 ticket_rows=ticket_rows,
             )
         )
-    in_flight = [row for row in catalog if row["current"] and not row["terminal"]]
-    settled = [row for row in catalog if not row["current"] or row["terminal"]]
+    in_flight = [row for row in catalog if row["current"] and not row["terminal"] and not row.get("failed")]
+    settled = [row for row in catalog if not (row["current"] and not row["terminal"] and not row.get("failed"))]
     in_flight.sort(key=lambda row: row.get("updated_at") or "", reverse=True)
     settled.sort(key=lambda row: row.get("updated_at") or "", reverse=True)
     catalog = in_flight + settled
     plays = _recent_workflow_plays(db, sources_by_name, by_id)
+    refresh_ids = {
+        (row.get("cve_id") or "").upper()
+        for row in plays
+        if row.get("refreshed") and not row.get("duplicate")
+    }
+    if refresh_ids:
+        catalog = [row for row in catalog if (row.get("cve_id") or "").upper() not in refresh_ids]
     cves = plays + catalog
     stations = [
         {

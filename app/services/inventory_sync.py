@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models.asset import Asset, AssetMatch
 from app.models.inventory_sync import InventorySyncState
+from app.utils.textclean import clean_email, sanitize_version
 
 log = logging.getLogger(__name__)
 
@@ -140,10 +141,10 @@ def parse_csv_text(text: str) -> list[dict[str, str]]:
                 "vendor": vendor,
                 "product": product or name,
                 "product_type": _pick(raw, "product_type") or "application",
-                "version": _pick(raw, "version"),
+                "version": sanitize_version(_pick(raw, "version")),
                 "owner_name": _pick(raw, "owner_name"),
                 "owner_username": _pick(raw, "owner_username"),
-                "owner_email": _pick(raw, "owner_email"),
+                "owner_email": clean_email(_pick(raw, "owner_email")),
                 "team": _pick(raw, "team"),
                 "environment": _pick(raw, "environment") or "production",
                 "external_id": _pick(raw, "external_id"),
@@ -165,10 +166,10 @@ def apply_asset_fields(asset: Asset, payload: dict[str, str], *, source: str | N
     asset.vendor = vendor
     asset.product = product or _norm(payload.get("name"))
     asset.system_type = _norm(payload.get("product_type") or payload.get("system_type"))
-    asset.version = _norm(payload.get("version"))
+    asset.version = sanitize_version(payload.get("version"))
     asset.owner_name = _norm(payload.get("owner_name"))
     asset.owner_username = _norm(payload.get("owner_username"))
-    asset.owner_email = _norm(payload.get("owner_email"))
+    asset.owner_email = clean_email(payload.get("owner_email"))
     asset.team = _norm(payload.get("team"))
     if payload.get("environment"):
         asset.environment = _norm(payload["environment"])
@@ -235,6 +236,19 @@ def purge_placeholder_assets(db: Session) -> int:
         db.delete(asset)
         removed += 1
     return removed
+
+
+def scrub_catalog_fields(db: Session) -> int:
+    """Fix RTL emails and float-noise versions already stored in Internal systems."""
+    changed = 0
+    for asset in db.query(Asset).all():
+        email = clean_email(asset.owner_email)
+        version = sanitize_version(asset.version)
+        if email != (asset.owner_email or "") or version != (asset.version or ""):
+            asset.owner_email = email
+            asset.version = version
+            changed += 1
+    return changed
 
 
 def get_or_create_state(db: Session, source: str) -> InventorySyncState:

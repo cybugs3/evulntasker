@@ -100,6 +100,19 @@ def test_station_journey_shows_timeout_wait_reason():
     assert "did not respond in time" in stations[2]["detail"]
 
 
+def test_failed_act_is_terminal_not_inflight():
+    progress = workflow_progress(
+        "failed",
+        has_intel=True,
+        has_match=True,
+        has_ticket=True,
+    )
+    assert progress["failed"] is True
+    assert progress["current"] == "act"
+    assert progress["terminal"] is True
+    assert progress["unmatched"] is False
+
+
 def test_workflow_snapshot_groups_inflight_first():
     import app.models  # noqa: F401
     from sqlalchemy import create_engine
@@ -441,6 +454,12 @@ def test_workflow_snapshot_plays_operator_rerun():
     assert play["cve_id"] == "CVE-2023-46805"
     assert play["refreshed"] is True
     assert play["duplicate"] is not True
+    catalog_copies = [
+        row
+        for row in snapshot["cves"]
+        if row["cve_id"] == "CVE-2023-46805" and not row.get("refreshed") and not row.get("duplicate")
+    ]
+    assert catalog_copies == []
 
 
 def test_apply_status_writes_both_fields_together():

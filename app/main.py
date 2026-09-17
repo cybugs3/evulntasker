@@ -25,6 +25,8 @@ from app.config import get_settings
 from app.db.session import init_db
 from app.logging_conf import configure_logging
 from app.services.seed import seed_if_empty
+from app.utils.http_basic import OptionalBasicAuthMiddleware
+from app.utils.rate_limit import SensitivePostLimitMiddleware
 from app.web.pages import router as pages_router
 from app.workers.queue import queue
 from app.workers.scheduler import create_scheduler
@@ -32,6 +34,12 @@ from app.workers.scheduler import create_scheduler
 log = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+def openapi_kwargs(env: str) -> dict:
+    if env == "production":
+        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    return {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"}
 
 
 @asynccontextmanager
@@ -53,9 +61,12 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title=__app_name__,
     version=__version__,
-    description="Elizarov Vulnrabilities Tasking Manager Platform",
+    description="Elizarov Vulnerabilities Tasking Manager Platform",
     lifespan=lifespan,
+    **openapi_kwargs(get_settings().env),
 )
+app.add_middleware(SensitivePostLimitMiddleware)
+app.add_middleware(OptionalBasicAuthMiddleware)
 app.include_router(api_router)
 app.include_router(pages_router)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "web" / "static")), name="static")

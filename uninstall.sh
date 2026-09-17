@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # Remove EVulnTasker from this Linux host. A copy of the database is kept.
 #
-#   sudo ./uninstall.sh
+# Typical (production prefix):
+#   sudo /opt/evulntasker/uninstall.sh --yes
+#
+# From a git clone that still has uninstall.sh (does not delete the clone unless
+# --prefix points at the clone):
+#   cd evulntasker
 #   sudo ./uninstall.sh --yes
+#
+# Full steps: README.md → Install from scratch → Uninstall.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -24,6 +31,12 @@ usage() {
   cat <<'EOF'
 Usage: ./uninstall.sh [options]
 
+Removes the production install (default /opt/evulntasker). A git clone used
+to run setup.sh is left in place unless you pass --prefix at that clone.
+
+  sudo ./uninstall.sh --yes
+  sudo /opt/evulntasker/uninstall.sh --yes
+
   --prefix DIR        Install location (default: /opt/evulntasker)
   --backup-dir DIR    Where to write the DB backup (default: /var/backups/evulntasker or ~/evulntasker-backups)
   --yes               Do not ask for confirmation
@@ -32,8 +45,18 @@ Usage: ./uninstall.sh [options]
 Stops the service (including leftover vaict / vulnintel units), copies the
 database aside (Incoming CVEs and Internal systems catalog), then deletes the
 application, virtualenv, systemd unit, logs, and .env (including
-GMAIL_APP_PASSWORD). The database backup is not deleted and does not contain
-Gmail secrets. Remaining product work is listed in GAPS.md before uninstall.
+GMAIL_APP_PASSWORD, SMTP passwords, and EVULNTASKER_BASIC_AUTH_PASSWORD).
+The database backup is not deleted and does not contain those secrets.
+
+Reinstall afterwards from a clone:
+
+  git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker
+  cd evulntasker
+  sudo ./setup.sh                  # online
+  sudo ./setup.sh --offline        # if you have vendor/wheels
+
+HTTP :8080 / Basic Auth notes are in README.md. Remaining product work is
+listed in GAPS.md before uninstall.
 EOF
 }
 
@@ -64,7 +87,7 @@ fi
 echo "This will remove EVulnTasker from: $PREFIX"
 echo "Database backup (Incoming CVEs + Internal systems catalog) will be written to: $BACKUP_DIR"
 echo "Leftover systemd units named vaict / vulnintel are stopped and removed if present."
-echo "GMAIL_APP_PASSWORD in $PREFIX/.env is deleted with the install and is NOT copied into the DB backup."
+echo "GMAIL_APP_PASSWORD, SMTP passwords, and EVULNTASKER_BASIC_AUTH_PASSWORD in $PREFIX/.env are deleted with the install and are NOT copied into the DB backup."
 if [[ "$YES" -ne 1 ]]; then
   read -r -p "Continue? [y/N] " ans
   [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "Aborted."; exit 1; }
@@ -92,7 +115,7 @@ if [[ -f "$PREFIX/.env" ]]; then
     : > "$PREFIX/.env"
     rm -f "$PREFIX/.env"
   fi
-  evulntasker_ok "Removed .env (GMAIL_APP_PASSWORD and other secrets are not in the database backup)"
+  evulntasker_ok "Removed .env (Gmail, SMTP, and Basic Auth secrets are not in the database backup)"
 fi
 
 # Do not delete the backup directory even if it lives under PREFIX.
@@ -113,12 +136,15 @@ else
   # In-place tree (dev checkout): remove generated artefacts, keep source.
   rm -f "$PREFIX/.env" "$PREFIX/logs/evulntasker.pid"
   evulntasker_warn "Prefix looks like a source tree — left application files in $PREFIX"
-  evulntasker_ok "Removed venv, logs, and .env (Gmail App Password wiped)"
+  evulntasker_ok "Removed venv, logs, and .env (Gmail, SMTP, and Basic Auth secrets wiped)"
 fi
 
 echo
 evulntasker_ok "EVulnTasker has been uninstalled"
 echo "  Database backup: $BACKUP_DIR (Incoming CVEs and Internal systems catalog)"
+echo "  To install again from a clone:"
+echo "    git clone <YOUR_EVULNTASKER_GIT_URL> evulntasker && cd evulntasker && sudo ./setup.sh"
+echo "    # air-gapped: unzip EVulnTasker-offline-*.zip && cd EVulnTasker-offline-* && sudo ./setup.sh --offline"
 if [[ "$HERE" != "$PREFIX" && -d "$HERE/venv" ]]; then
   evulntasker_warn "Left checkout venv in place: $HERE/venv (not part of $PREFIX)"
   echo "  To drop it:  rm -rf $HERE/venv"

@@ -77,6 +77,45 @@ def test_csv_template_is_headers_only():
     assert "example.com" not in text
 
 
+def test_parse_csv_strips_rtl_email_and_float_version():
+    rows = parse_csv_text(
+        "vendor,product,product_type,version,owner_email\n"
+        "canonical,ubuntu,linux,24.039999999999999,guy@corp.local\u200f\n"
+    )
+    assert rows[0]["version"] == "24.04"
+    assert rows[0]["owner_email"] == "guy@corp.local"
+
+
+def test_scrub_catalog_fields_cleans_stored_rows():
+    import app.models  # noqa: F401
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.session import Base
+    from app.models.asset import Asset
+    from app.services.inventory_sync import scrub_catalog_fields
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, expire_on_commit=False)()
+    db.add(
+        Asset(
+            name="ubuntu",
+            vendor="canonical",
+            product="ubuntu",
+            version="24.039999999999999",
+            owner_email="guy@corp.local\u200f",
+        )
+    )
+    db.commit()
+    changed = scrub_catalog_fields(db)
+    db.commit()
+    row = db.query(Asset).one()
+    assert changed == 1
+    assert row.version == "24.04"
+    assert row.owner_email == "guy@corp.local"
+
+
 def test_placeholder_assets_are_demo_rows():
     assert is_placeholder_asset(SimpleNamespace(name="AI-mapped ftp", owner_email=""))
     assert is_placeholder_asset(SimpleNamespace(name="httpd", owner_email="maya.cohen@example.com"))

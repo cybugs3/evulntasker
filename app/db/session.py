@@ -166,6 +166,10 @@ def init_db() -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
     Base.metadata.create_all(bind=engine)
+    if settings.is_sqlite and ":memory:" not in settings.database_url:
+        from app.utils.file_perms import restrict_private_file
+
+        restrict_private_file(Path(db_path))
     _upgrade_existing_schema()
     from app.services.ai_marks import clear_unconfigured_ai_marks
 

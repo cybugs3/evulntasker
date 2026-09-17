@@ -618,6 +618,7 @@ async function loadSettings() {
   document.getElementById("custom-hunt-project").value = ticket.custom_hunt_project || "HUNT";
   document.getElementById("ticket-hunt-email").value = ticket.hunt_email || "";
   document.getElementById("ticket-owner-email").value = ticket.fallback_owner_email || "";
+  document.getElementById("ticket-email-domains").value = (ticket.email_domains || "").trim();
   document.getElementById("smtp-host").value = ticket.smtp_host || "";
   document.getElementById("smtp-port").value = ticket.smtp_port || 25;
   setChoice("smtp-tls", ticket.smtp_tls_mode || "plain");
@@ -1036,6 +1037,7 @@ function ticketingBody() {
     custom_hunt_project: document.getElementById("custom-hunt-project").value.trim(),
     hunt_email: document.getElementById("ticket-hunt-email").value.trim(),
     fallback_owner_email: document.getElementById("ticket-owner-email").value.trim(),
+    email_domains: document.getElementById("ticket-email-domains").value.trim(),
     smtp_host: document.getElementById("smtp-host").value.trim(),
     smtp_port: Number(document.getElementById("smtp-port").value || 25),
     smtp_tls_mode: selectedChoice("smtp-tls") || "plain",

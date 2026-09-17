@@ -37,7 +37,8 @@ class SourceOut(ORMModel):
     enabled: bool
     ai_fallback_enabled: bool
     config: dict[str, Any]
-    webhook_token: str | None
+    webhook_token: str | None = None
+    webhook_token_set: bool = False
     last_event_at: datetime | None
     last_error: str | None
     event_count: int

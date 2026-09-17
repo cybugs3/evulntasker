@@ -106,6 +106,7 @@ def test_settings_feeds_are_atom():
         assert 'data-tab="message"' in html
         assert "{{name}}" in html or "{{cve_id}}" in html
         assert "SMTP host" in html
+        assert "Allowed recipient domains" in html
         assert "Enable AI module" not in html
         assert "Only one AI module can be enabled" in html
         assert "AI is optional" in html

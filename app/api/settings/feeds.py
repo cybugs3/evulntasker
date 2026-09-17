@@ -22,6 +22,7 @@ from app.models.source import InputSource
 from app.services import file_ingest
 from app.services.ingestion import ingest_payload, skip_unchanged_ingest_file
 from app.utils.cve import extract_cves
+from app.utils.outbound_url import OutboundUrlError, assert_http_url
 
 router = APIRouter()
 
@@ -131,6 +132,13 @@ def save_smb(body: SmbIn, db: Session = Depends(get_db)) -> dict[str, Any]:
 def save_local(body: LocalIn, db: Session = Depends(get_db)) -> dict[str, Any]:
     source = get_or_create_source(db, "local")
     apply_display_name(db, source, body.name, "local")
+    path = (body.path or "").strip()
+    if path:
+        try:
+            file_ingest.ensure_local_folder_allowed(path)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        body.path = path
     save_source_cfg(source, body, ["path", "poll_seconds"])
     db.commit()
     db.refresh(source)
@@ -170,6 +178,13 @@ def save_web_api(body: WebApiIn, db: Session = Depends(get_db)) -> dict[str, Any
     ]
     if not any(row["url"] for row in incoming) and body.url.strip():
         incoming = [{"url": body.url.strip(), "name": "", "token": body.token.strip()}]
+    for row in incoming:
+        if not row["url"]:
+            continue
+        try:
+            assert_http_url(row["url"])
+        except OutboundUrlError as exc:
+            raise HTTPException(400, str(exc)) from exc
     feeds = merge_preserved_tokens(normalize_feeds({"feeds": incoming}), cfg)
     apply_display_name(db, source, body.name, "web_api")
     cfg["feeds"] = feeds
@@ -298,6 +313,7 @@ def test_web_api(db: Session = Depends(get_db)) -> dict[str, Any]:
             )
             continue
         try:
+            assert_http_url(feed["url"])
             response = httpx.get(feed["url"], timeout=20.0, headers=feed_headers(feed.get("token") or ""))
             response.raise_for_status()
             parsed = parse_feed(response.text)
@@ -462,6 +478,7 @@ def pull_web_api(
             continue
         feed_ingested = 0
         try:
+            assert_http_url(url)
             response = httpx.get(url, timeout=30.0, headers=feed_headers(feed.get("token") or ""))
             response.raise_for_status()
             parsed = parse_feed(response.text)

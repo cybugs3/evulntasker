@@ -110,6 +110,7 @@ class TicketingIn(BaseModel):
     custom_hunt_project: str = "HUNT"
     hunt_email: str = ""
     fallback_owner_email: str = ""
+    email_domains: str = ""
     smtp_host: str = ""
     smtp_port: int = Field(default=25, ge=1, le=65535)
     smtp_tls_mode: str = "plain"
@@ -355,6 +356,7 @@ def save_ticketing(body: TicketingIn) -> dict[str, Any]:
         "CUSTOM_HUNT_PROJECT": body.custom_hunt_project.strip() or "HUNT",
         "TICKETING_HUNT_EMAIL": body.hunt_email.strip(),
         "TICKETING_FALLBACK_OWNER_EMAIL": body.fallback_owner_email.strip(),
+        "TICKETING_EMAIL_DOMAINS": body.email_domains.strip() or " ",
         "SMTP_RELAY_HOST": body.smtp_host.strip(),
         "SMTP_RELAY_PORT": str(body.smtp_port),
         "SMTP_RELAY_USERNAME": body.smtp_username.strip(),
@@ -548,6 +550,7 @@ def ticketing_payload(cfg: Any) -> dict[str, Any]:
         "custom_hunt_project": cfg.custom_hunt_project,
         "hunt_email": cfg.ticketing_hunt_email,
         "fallback_owner_email": cfg.ticketing_fallback_owner_email,
+        "email_domains": cfg.ticketing_email_domains,
         "configured": cfg.ticketing_configured,
         "smtp_host": cfg.smtp_relay_host,
         "smtp_port": cfg.smtp_relay_port,

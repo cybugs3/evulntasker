@@ -72,12 +72,15 @@ def seed_if_empty() -> None:
             log.exception("Could not seed ATOM feeds from the repository catalog")
             db.rollback()
 
-        from app.services.inventory_sync import purge_placeholder_assets
+        from app.services.inventory_sync import purge_placeholder_assets, scrub_catalog_fields
 
         try:
             removed = purge_placeholder_assets(db)
+            scrubbed = scrub_catalog_fields(db)
             if removed:
                 log.info("Removed %s placeholder Internal systems row(s)", removed)
+            if scrubbed:
+                log.info("Scrubbed email/version on %s Internal systems row(s)", scrubbed)
             db.commit()
         except Exception:
             log.exception("Could not purge placeholder inventory rows")

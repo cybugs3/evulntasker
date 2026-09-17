@@ -20,17 +20,24 @@ from app.models.jira import JiraTicket
 from app.models.vulnerability import Vulnerability
 from app.pipeline.state import begin_step, complete_step, set_status
 from app.services.mail_templates import render_hunt, render_owner
+from app.utils.textclean import clean_email, email_domain_allowed, parse_email_domains
 
 log = logging.getLogger(__name__)
 
-_PLACEHOLDER_MAIL = {"soc@example.com", "threat-hunting@example.com"}
-
 
 def _clean_email(value: str | None) -> str:
-    email = (value or "").strip()
-    if not email or email.lower() in _PLACEHOLDER_MAIL:
-        return ""
-    return email
+    return clean_email(value)
+
+
+def _act_email_domains(settings) -> list[str]:
+    return parse_email_domains(getattr(settings, "ticketing_email_domains", "") or "")
+
+
+def _allow_act_email(email: str, domains: list[str], cve_id: str, role: str) -> bool:
+    if email_domain_allowed(email, domains):
+        return True
+    log.warning("%s skipped %s mail to %s — domain is not in the allow-list", cve_id, role, email)
+    return False
 
 
 def _mail_ticket_key(kind: str, email: str) -> str:
@@ -167,6 +174,7 @@ async def _open_email_owner_tasks(
     fallback_email: str = "",
     *,
     store: bool = True,
+    domains: list[str] | None = None,
 ) -> tuple[dict | None, list[dict]]:
     groups = _matched_owner_groups(vuln, fallback_email=fallback_email)
     last = None
@@ -174,21 +182,30 @@ async def _open_email_owner_tasks(
     if not groups:
         log.info("%s email ticketing — no Internal systems owner_email to notify", vuln.cve_id)
         return None, issues
+    errors: list[str] = []
+    allowed = domains if domains is not None else _act_email_domains(get_settings())
     for group in groups:
         email = group["email"]
         if email.lower() in existing_assignees:
             continue
+        if not _allow_act_email(email, allowed, vuln.cve_id, "owner"):
+            continue
         payload = _payload_for_owner_group(vuln, group)
         subject, description = render_owner(vuln, payload)
-        last = await ticketing.create_issue(
-            project_key=owner_project,
-            summary=subject or f"[{payload['priority']}] {vuln.cve_id} — {payload['product'] or 'unknown product'}",
-            description=description or _owner_description(vuln, payload),
-            assignee=email,
-            labels=["evulntasker", "owner-action", (vuln.severity or "unknown").lower()],
-            priority=payload["priority"],
-            to=email,
-        )
+        try:
+            last = await ticketing.create_issue(
+                project_key=owner_project,
+                summary=subject or f"[{payload['priority']}] {vuln.cve_id} — {payload['product'] or 'unknown product'}",
+                description=description or _owner_description(vuln, payload),
+                assignee=email,
+                labels=["evulntasker", "owner-action", (vuln.severity or "unknown").lower()],
+                priority=payload["priority"],
+                to=email,
+            )
+        except Exception as exc:
+            log.exception("%s SMTP/owner mail failed for %s", vuln.cve_id, email)
+            errors.append(f"{email}: {exc}")
+            continue
         key = last.get("key") or _mail_ticket_key("owner", email)
         issues.append(
             {
@@ -213,6 +230,10 @@ async def _open_email_owner_tasks(
             raw_response=_pack_ticket_raw("email", last.get("raw")),
         )
         existing_assignees.add(email.lower())
+    if errors and not issues:
+        raise RuntimeError("; ".join(errors))
+    if errors:
+        log.warning("%s mailed some owners; skipped: %s", vuln.cve_id, "; ".join(errors))
     return last, issues
 
 
@@ -266,7 +287,10 @@ async def take_action(
     clients = get_ticketing_clients(settings)
     owner_issue = hunt_issue = None
     issues: list[dict] = []
-    hunt_to = (settings.ticketing_hunt_email or "").strip()
+    hunt_to = _clean_email(settings.ticketing_hunt_email)
+    domains = _act_email_domains(settings)
+    if hunt_to and not _allow_act_email(hunt_to, domains, vuln.cve_id, "hunt"):
+        hunt_to = ""
 
     for provider, ticketing in clients:
         owner_project, hunt_project = _projects_for(settings, provider)
@@ -292,6 +316,7 @@ async def take_action(
                 },
                 fallback_email=settings.ticketing_fallback_owner_email,
                 store=store,
+                domains=domains,
             )
             issues.extend(email_issues)
         elif not has_owner:
@@ -331,14 +356,20 @@ async def take_action(
         skip_email_hunt = provider == "email" and not hunt_to
         if not has_hunt and not skip_email_hunt:
             hunt_subject, hunt_body = render_hunt(vuln, detections)
-            hunt_issue = await ticketing.create_issue(
-                project_key=hunt_project,
-                summary=hunt_subject or f"[HUNT] {vuln.cve_id} — Sigma/SIEM detections",
-                description=hunt_body or _hunt_description(vuln, detections),
-                labels=["evulntasker", "threat-hunting", (vuln.severity or "unknown").lower()],
-                priority=payload["priority"],
-                **({"to": hunt_to} if provider == "email" else {}),
-            )
+            try:
+                hunt_issue = await ticketing.create_issue(
+                    project_key=hunt_project,
+                    summary=hunt_subject or f"[HUNT] {vuln.cve_id} — Sigma/SIEM detections",
+                    description=hunt_body or _hunt_description(vuln, detections),
+                    labels=["evulntasker", "threat-hunting", (vuln.severity or "unknown").lower()],
+                    priority=payload["priority"],
+                    **({"to": hunt_to} if provider == "email" else {}),
+                )
+            except Exception:
+                log.exception("%s hunt mail failed for %s", vuln.cve_id, hunt_to or provider)
+                if not issues:
+                    raise
+                continue
             hunt_key = _mail_ticket_key("hunt", hunt_to) if provider == "email" else hunt_issue["key"]
             issues.append(
                 {

@@ -219,7 +219,12 @@ def extraction_queue(db: Session = Depends(get_db), include_rows: bool = True) -
             "events": len(event_rows) if include_rows else int(event_rows_n),
             "cves": counts["cves"],
             "ai_fallback": counts["ai_extract"],
-            "failed": counts["failed"],
+            "failed": sum(
+                1
+                for item in classified
+                if item["progress"].get("failed")
+                and item["progress"].get("current") in {"ingest", "extract"}
+            ),
             "duplicates": duplicates,
         },
     }

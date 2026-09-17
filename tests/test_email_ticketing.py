@@ -274,6 +274,121 @@ def test_open_email_owner_tasks_mails_each_internal_system_owner():
     assert {t.assignee for t in vuln.tickets} == {"alice@corp.local", "bob@corp.local"}
 
 
+def test_open_email_owner_tasks_skips_domains_outside_allow_list():
+    db = _session()
+    vuln = Vulnerability(cve_id="CVE-2024-1", vendor="Apache", product="httpd", severity="HIGH", priority="P1")
+    inside = Asset(
+        name="apache-prod",
+        vendor="Apache",
+        product="httpd",
+        owner_email="alice@corp.local",
+        owner_name="Alice",
+        team="Web",
+    )
+    outside = Asset(
+        name="libssl",
+        vendor="OpenSSL",
+        product="openssl",
+        owner_email="eve@evil.example",
+        owner_name="Eve",
+        team="Other",
+    )
+    db.add_all([vuln, inside, outside])
+    db.commit()
+    db.refresh(vuln)
+    db.refresh(inside)
+    db.refresh(outside)
+    db.add_all(
+        [
+            AssetMatch(vulnerability_id=vuln.id, asset_id=inside.id, method="local"),
+            AssetMatch(vulnerability_id=vuln.id, asset_id=outside.id, method="local"),
+        ]
+    )
+    db.commit()
+    db.refresh(vuln)
+
+    sent = []
+
+    class FakeTicketing:
+        async def create_issue(self, **kwargs):
+            sent.append(kwargs)
+            return {"key": "MAIL-owner", "url": f"mailto:{kwargs['to']}", "dry_run": False, "raw": {}}
+
+    last, issues = asyncio.run(
+        _open_email_owner_tasks(
+            db,
+            vuln,
+            FakeTicketing(),
+            "MAIL",
+            existing_assignees=set(),
+            domains=["corp.local"],
+        )
+    )
+    assert last is not None
+    assert len(issues) == 1
+    assert [row["to"] for row in sent] == ["alice@corp.local"]
+
+
+def test_rtl_mark_is_stripped_from_owner_email():
+    from app.pipeline.step5_act import _clean_email
+
+    dirty = "michaelelizarov15@gmail.com\u200f"
+    assert _clean_email(dirty) == "michaelelizarov15@gmail.com"
+
+
+def test_open_email_owner_tasks_keeps_going_if_one_mailbox_fails():
+    db = _session()
+    vuln = Vulnerability(cve_id="CVE-2024-1", vendor="linux", product="linux kernel", severity="HIGH", priority="P1")
+    good = Asset(name="ubuntu", vendor="canonical", product="ubuntu", owner_email="alice@corp.local", owner_name="Alice", team="Linux")
+    bad = Asset(
+        name="glibc",
+        vendor="gnu",
+        product="glibc",
+        owner_email="michaelelizarov15@gmail.com\u200f",
+        owner_name="Lib",
+        team="Libs",
+    )
+    db.add_all([vuln, good, bad])
+    db.commit()
+    db.refresh(vuln)
+    db.refresh(good)
+    db.refresh(bad)
+    db.add_all(
+        [
+            AssetMatch(vulnerability_id=vuln.id, asset_id=good.id, method="csv"),
+            AssetMatch(vulnerability_id=vuln.id, asset_id=bad.id, method="csv"),
+        ]
+    )
+    db.commit()
+    db.refresh(vuln)
+
+    sent = []
+
+    class FakeTicketing:
+        async def create_issue(self, **kwargs):
+            to = kwargs["to"]
+            if to.startswith("michaelelizarov15"):
+                raise RuntimeError("SMTP 555")
+            sent.append(kwargs)
+            return {"key": "MAIL-owner", "url": f"mailto:{to}", "dry_run": False, "raw": {}}
+
+    last, issues = asyncio.run(
+        _open_email_owner_tasks(
+            db,
+            vuln,
+            FakeTicketing(),
+            "MAIL",
+            existing_assignees=set(),
+        )
+    )
+    db.commit()
+    db.refresh(vuln)
+    assert last is not None
+    assert [row["to"] for row in sent] == ["alice@corp.local"]
+    assert len(issues) == 1
+    assert {t.assignee for t in vuln.tickets} == {"alice@corp.local"}
+
+
 def test_smtp_relay_preferred_over_exchange(monkeypatch):
     sent = []
 

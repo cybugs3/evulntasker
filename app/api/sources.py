@@ -8,6 +8,7 @@ from app.api.settings.common import (
     MANAGED_SOURCE_TYPES,
     SOURCES,
     get_or_create_source as _get_or_create,
+    public_source_config,
     retire_legacy_seed_sources,
 )
 from app.db.session import get_db
@@ -94,6 +95,29 @@ def _cves_for_source(db: Session, source: InputSource, *, scan_raw: bool = False
     return [cve for cve in seen if allow_cve(cve)]
 
 
+def _source_out(
+    source: InputSource,
+    *,
+    cve_count: int = 0,
+    reveal_webhook: bool = False,
+) -> SourceOut:
+    return SourceOut(
+        id=source.id,
+        name=source.name,
+        source_type=source.source_type,
+        description=source.description or "",
+        enabled=bool(source.enabled),
+        ai_fallback_enabled=bool(source.ai_fallback_enabled),
+        config=public_source_config(source),
+        webhook_token=source.webhook_token if reveal_webhook else None,
+        webhook_token_set=bool(source.webhook_token),
+        last_event_at=source.last_event_at,
+        last_error=source.last_error,
+        event_count=int(source.event_count or 0),
+        cve_count=cve_count,
+    )
+
+
 def _feed_payload(db: Session, key: str) -> dict[str, Any]:
     name, _source_type, description = SOURCES[key]
     source = _get_or_create(db, key)
@@ -168,11 +192,10 @@ def list_sources(db: Session = Depends(get_db)) -> list[SourceOut]:
     retire_legacy_seed_sources(db)
     sources = [_get_or_create(db, key) for key in SOURCES]
     db.commit()
-    out: list[SourceOut] = []
-    for source in sources:
-        item = SourceOut.model_validate(source)
-        out.append(item.model_copy(update={"cve_count": len(_cves_for_source(db, source, scan_raw=False))}))
-    return out
+    return [
+        _source_out(source, cve_count=len(_cves_for_source(db, source, scan_raw=False)))
+        for source in sources
+    ]
 
 
 @router.post("/sources/inline")
@@ -196,18 +219,18 @@ def ingest_inline_source(body: InlineCveIn, db: Session = Depends(get_db)) -> di
 
 
 @router.post("/sources", response_model=SourceOut)
-def create_source(body: SourceCreate, db: Session = Depends(get_db)) -> InputSource:
+def create_source(body: SourceCreate, db: Session = Depends(get_db)) -> SourceOut:
     source = InputSource(**body.model_dump())
     if source.source_type == "webhook":
         source.webhook_token = new_webhook_token()
     db.add(source)
     db.commit()
     db.refresh(source)
-    return source
+    return _source_out(source, reveal_webhook=True)
 
 
 @router.patch("/sources/{source_id}", response_model=SourceOut)
-def update_source(source_id: int, body: SourceUpdate, db: Session = Depends(get_db)) -> InputSource:
+def update_source(source_id: int, body: SourceUpdate, db: Session = Depends(get_db)) -> SourceOut:
     source = db.get(InputSource, source_id)
     if not source:
         raise HTTPException(404, "Source not found")
@@ -215,11 +238,11 @@ def update_source(source_id: int, body: SourceUpdate, db: Session = Depends(get_
         setattr(source, key, value)
     db.commit()
     db.refresh(source)
-    return source
+    return _source_out(source)
 
 
 @router.post("/sources/{source_id}/toggle", response_model=SourceOut)
-def toggle_source(source_id: int, db: Session = Depends(get_db)) -> InputSource:
+def toggle_source(source_id: int, db: Session = Depends(get_db)) -> SourceOut:
     source = db.get(InputSource, source_id)
     if not source:
         raise HTTPException(404, "Source not found")
@@ -236,7 +259,7 @@ def toggle_source(source_id: int, db: Session = Depends(get_db)) -> InputSource:
         sync_source_repositories(db, commit=False)
     db.commit()
     db.refresh(source)
-    return source
+    return _source_out(source)
 
 
 @router.get("/sources/{source_id}/events", response_model=list[IngestEventOut])
